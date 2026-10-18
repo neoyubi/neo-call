@@ -103,7 +103,7 @@
     "reason": "Powód: {{reason}}"
   },
   "hangup_button_label": "Zakończ połączenie",
-  "header_label": "Strona główna Element Call",
+  "header_label": "Strona główna {{brand}}",
   "header_participants_label": "Uczestnicy",
   "invite_modal": {
     "link_copied_toast": "Skopiowano link do schowka",

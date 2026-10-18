@@ -111,7 +111,7 @@
     "overlay_title": "Režim sluchátka"
   },
   "hangup_button_label": "Ukončit hovor",
-  "header_label": "Domov Element Call",
+  "header_label": "Domov {{brand}}",
   "header_participants_label": "Účastníci",
   "invite_modal": {
     "link_copied_toast": "Odkaz zkopírován do schránky",

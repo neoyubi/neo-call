@@ -114,7 +114,7 @@
     "overlay_title": "Ohrhörer Modus"
   },
   "hangup_button_label": "Anruf beenden",
-  "header_label": "Element Call-Startseite",
+  "header_label": "{{brand}}-Startseite",
   "header_participants_label": "Teilnehmende",
   "invite_modal": {
     "link_copied_toast": "Link in Zwischenablage kopiert",

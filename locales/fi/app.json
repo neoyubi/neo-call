@@ -104,7 +104,7 @@
     "reason": "Syy: {{reason}}"
   },
   "hangup_button_label": "Lopeta puhelu",
-  "header_label": "Element Call Etusivu",
+  "header_label": "{{brand}} Etusivu",
   "header_participants_label": "Osallistujat",
   "invite_modal": {
     "link_copied_toast": "Linkki kopioitu leikepöydälle",

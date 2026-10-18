@@ -46,7 +46,7 @@
   },
   "disconnected_banner": "La connexion avec le serveur a été perdue.",
   "hangup_button_label": "Terminer l’appel",
-  "header_label": "Accueil Element Call",
+  "header_label": "Accueil {{brand}}",
   "invite_modal": {
     "link_copied_toast": "Lien copié dans le presse-papier",
     "title": "Inviter dans cet appel"

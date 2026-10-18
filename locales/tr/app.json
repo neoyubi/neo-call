@@ -95,7 +95,7 @@
     "reason": "Neden: {{reason}}"
   },
   "hangup_button_label": "Aramayı sonlandır",
-  "header_label": "Element Call Ana Sayfa",
+  "header_label": "{{brand}} Ana Sayfa",
   "header_participants_label": "Katılımcılar",
   "invite_modal": {
     "link_copied_toast": "Bağlantı panoya kopyalandı",

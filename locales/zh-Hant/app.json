@@ -48,7 +48,7 @@
   },
   "disconnected_banner": "到伺服器的連線已遺失。",
   "hangup_button_label": "結束通話",
-  "header_label": "Element Call 首頁",
+  "header_label": "{{brand}} 首頁",
   "header_participants_label": "參與者",
   "invite_modal": {
     "link_copied_toast": "連結已複製到剪貼簿",

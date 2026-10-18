@@ -57,7 +57,7 @@
     "knock_reject_body": "房间成员拒绝了你的加入请求"
   },
   "hangup_button_label": "通话结束",
-  "header_label": "Element Call主页",
+  "header_label": "{{brand}}主页",
   "header_participants_label": "参与者",
   "invite_modal": {
     "link_copied_toast": "链接已复制到剪贴板",

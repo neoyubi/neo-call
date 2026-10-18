@@ -166,7 +166,7 @@
     "overlay_title": "Handset Mode"
   },
   "hangup_button_label": "End call",
-  "header_label": "Element Call Home",
+  "header_label": "{{brand}} Home",
   "header_participants_label": "Participants",
   "home": {
     "meeting_tile_label": "{{name}}, {{time}}",

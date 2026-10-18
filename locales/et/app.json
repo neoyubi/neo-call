@@ -112,7 +112,7 @@
     "overlay_description": "See toimib vaid rakenduse kasutamise ajal"
   },
   "hangup_button_label": "Lõpeta kõne",
-  "header_label": "Avaleht: Element Call",
+  "header_label": "Avaleht: {{brand}}",
   "header_participants_label": "Osalejad",
   "invite_modal": {
     "link_copied_toast": "Link on kopeeritud lõikelauale",

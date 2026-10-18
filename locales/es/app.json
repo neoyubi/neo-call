@@ -39,7 +39,7 @@
     "settings": "Ajustes",
     "username": "Nombre de usuario"
   },
-  "header_label": "Inicio de Element Call",
+  "header_label": "Inicio de {{brand}}",
   "join_existing_call_modal": {
     "join_button": "Si, unirse a la llamada",
     "text": "Esta llamada ya existe, ¿te gustaría unirte?",

@@ -103,7 +103,7 @@
     "reason": "Iemesls: {{reason}}"
   },
   "hangup_button_label": "Beigt zvanu",
-  "header_label": "Element Call sākums",
+  "header_label": "{{brand}} sākums",
   "header_participants_label": "Dalībnieki",
   "invite_modal": {
     "link_copied_toast": "Saite nokopēta",

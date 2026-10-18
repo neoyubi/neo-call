@@ -103,7 +103,7 @@
     "reason": "Причина: {{reason}}"
   },
   "hangup_button_label": "Завершити виклик",
-  "header_label": "Домівка Element Call",
+  "header_label": "Домівка {{brand}}",
   "header_participants_label": "Учасники",
   "invite_modal": {
     "link_copied_toast": "Посилання скопійовано до буфера обміну",

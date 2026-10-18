@@ -14,7 +14,7 @@ import { UserProfileIcon } from "@vector-im/compound-design-tokens/assets/web/ic
 
 import styles from "./Header.module.css";
 import Logo from "./icons/Logo.svg?react";
-import { brandingLogoUrl } from "./branding";
+import { brandingLogoUrl, productName } from "./branding";
 import { Avatar, Size } from "./Avatar";
 import { EncryptionLock } from "./room/EncryptionLock";
 import { useMediaQuery } from "./useMediaQuery";
@@ -121,7 +121,7 @@ export const HeaderLogo: FC<HeaderLogoProps> = ({ className }) => {
     <Link
       className={classNames(styles.headerLogo, className)}
       to="/"
-      aria-label={t("header_label")}
+      aria-label={t("header_label", { brand: productName() })}
     >
       {logoUrl ? <img src={logoUrl} alt="" height={30} /> : <Logo />}
     </Link>

@@ -106,7 +106,7 @@
     "reason": "Причина: {{reason}}"
   },
   "hangup_button_label": "Завершить звонок",
-  "header_label": "Главная Element Call",
+  "header_label": "Главная {{brand}}",
   "header_participants_label": "Участники",
   "invite_modal": {
     "link_copied_toast": "Ссылка скопирована в буфер обмена",

@@ -102,7 +102,7 @@
     "reason": "Motivul"
   },
   "hangup_button_label": "Încheiați apelul",
-  "header_label": "Element Call Home",
+  "header_label": "{{brand}} Home",
   "header_participants_label": "Participanți",
   "invite_modal": {
     "link_copied_toast": "Link copiat în clipboard",

@@ -113,7 +113,7 @@
     "overlay_title": "Telefonläge"
   },
   "hangup_button_label": "Avsluta samtal",
-  "header_label": "Element Call Hem",
+  "header_label": "{{brand}} Hem",
   "header_participants_label": "Deltagare",
   "invite_modal": {
     "link_copied_toast": "Länk kopierad till klippbordet",

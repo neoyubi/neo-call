@@ -74,7 +74,6 @@
     "show_non_member_tiles": "Εμφάνιση πλακιδίων για μέσα μη-μελών",
     "url_params": "Παράμετροι URL"
   },
-  "header_label": "Element Κεντρική Οθόνη Κλήσεων",
   "join_existing_call_modal": {
     "join_button": "Ναι, συμμετοχή στην κλήση",
     "text": "Αυτή η κλήση υπάρχει ήδη, θα θέλατε να συμμετάσχετε;",
