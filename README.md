@@ -186,7 +186,10 @@ rendered.
 
 `SYNAPSE_URL`, `BOT_ACCESS_TOKEN`, `SERVER_NAME`, `MEETING_STATE_TYPE`,
 `REMINDER_DEFAULT_MINUTES`, `DEFAULT_TIMEZONE` and the calendar variables
-above have the same meaning here as in the room service.
+above have the same meaning here as in the room service. Set
+`ELEMENT_CALL_BASE_URL` here too: the worker then refuses to mail a join link
+that points anywhere else. It only acts on meeting state the bot account sent
+itself.
 
 ### Running the service tests
 

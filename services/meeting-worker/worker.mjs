@@ -7,6 +7,12 @@ const SERVER_NAME = process.env.SERVER_NAME;
 const MEETING_STATE_TYPE =
   process.env.MEETING_STATE_TYPE || "io.element.call.scheduled_meeting";
 
+// Optional. When set, a meeting whose join link points anywhere else is not
+// mailed, so a tampered link can never go out under the organisation's name.
+const ELEMENT_CALL_BASE_URL = process.env.ELEMENT_CALL_BASE_URL?.replace(
+  /\/+$/,
+  "",
+);
 const CALDAV_URL_BASE = process.env.CALDAV_URL_BASE;
 const CALDAV_USER = process.env.CALDAV_USER;
 const CALDAV_PASSWORD = process.env.CALDAV_PASSWORD;
@@ -64,16 +70,46 @@ async function synapseRequest(path, options = {}) {
   return { status: resp.status, data };
 }
 
+// The bot's own user id, resolved once. Only meeting state the bot wrote is
+// trusted: room members may hold enough power to send state themselves.
+let botUserId;
+async function getBotUserId() {
+  if (!botUserId) {
+    const { status, data } = await synapseRequest(
+      "/_matrix/client/v3/account/whoami",
+    );
+    if (status !== 200 || typeof data?.user_id !== "string") {
+      throw new Error(`whoami failed with status ${status}`);
+    }
+    botUserId = data.user_id;
+  }
+  return botUserId;
+}
+
 // Read a room's meeting state event. Returns the content object, or null if
-// the room has no such event (404 / M_NOT_FOUND).
+// the room has no such event (404 / M_NOT_FOUND), if anyone but the bot sent
+// it, or if its join link is not one of ours.
 async function getMeetingState(roomId) {
   const { status, data } = await synapseRequest(
-    `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/${MEETING_STATE_TYPE}/`,
+    `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/${MEETING_STATE_TYPE}/?format=event`,
   );
-  if (status === 200 && data && typeof data === "object") {
-    return data;
+  if (status !== 200 || !data || typeof data.content !== "object") {
+    return null;
   }
-  return null;
+  if (data.sender !== (await getBotUserId())) {
+    console.warn("Ignoring meeting state in a room: not sent by the bot");
+    return null;
+  }
+  const content = data.content;
+  if (
+    ELEMENT_CALL_BASE_URL &&
+    content.meet_link &&
+    !String(content.meet_link).startsWith(`${ELEMENT_CALL_BASE_URL}/`)
+  ) {
+    console.warn("Ignoring meeting state in a room: join link is not ours");
+    return null;
+  }
+  return content;
 }
 
 // PUT the full meeting state content back (caller passes the merged object so

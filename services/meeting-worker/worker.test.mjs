@@ -59,6 +59,7 @@ register(
 process.env.SYNAPSE_URL = SYNAPSE_URL;
 process.env.BOT_ACCESS_TOKEN = "bot-access-token";
 process.env.SERVER_NAME = "example.com";
+process.env.ELEMENT_CALL_BASE_URL = "https://call.example.com/";
 process.env.CALDAV_URL_BASE = CALDAV_BASE;
 process.env.CALDAV_USER = "calendar@example.com";
 process.env.CALDAV_PASSWORD = "s3cret-app-password";
@@ -92,8 +93,11 @@ const realConsole = {
   warn: console.warn,
   error: console.error,
 };
+const BOT_USER_ID = "@bot:example.com";
+
 let calls;
 let rooms;
+let senders;
 let caldavStatus;
 let statePutStatus;
 let logged;
@@ -101,6 +105,7 @@ let logged;
 function install() {
   calls = [];
   rooms = new Map();
+  senders = new Map();
   caldavStatus = 204;
   statePutStatus = 200;
   logged = [];
@@ -113,6 +118,9 @@ function install() {
       return { status: caldavStatus };
     }
     const path = url.slice(SYNAPSE_URL.length);
+    if (path === "/_matrix/client/v3/account/whoami") {
+      return { status: 200, json: async () => ({ user_id: BOT_USER_ID }) };
+    }
     if (path === "/_matrix/client/v3/joined_rooms") {
       return {
         status: 200,
@@ -126,9 +134,13 @@ function install() {
       return { status: statePutStatus, json: async () => ({ event_id: "$1" }) };
     }
     const state = rooms.get(roomId);
+    const sender = senders.get(roomId) ?? BOT_USER_ID;
     return {
       status: state ? 200 : 404,
-      json: async () => state ?? { errcode: "M_NOT_FOUND" },
+      json: async () =>
+        state
+          ? { type: STATE_TYPE, state_key: "", sender, content: state }
+          : { errcode: "M_NOT_FOUND" },
     };
   };
 }
@@ -555,16 +567,53 @@ describe("logs carry no personal data", () => {
 
 describe("state event type", () => {
   test("the configured event type is the one read and written", async () => {
-    let requested;
+    const requested = [];
     const inner = globalThis.fetch;
     globalThis.fetch = async (url, options) => {
-      if (url.includes("/state/")) requested = url;
+      if (url.includes("/state/")) requested.push(url);
       return inner(url, options);
     };
     rooms.set(ROOM_ID, meeting({ scheduled_start: Date.now() - MINUTE }));
 
     await processMeetingEmails();
 
-    assert.ok(requested.endsWith(`/state/${STATE_TYPE}/`));
+    assert.ok(requested.length > 0);
+    for (const url of requested) {
+      assert.ok(
+        url.endsWith(`/state/${STATE_TYPE}/`) ||
+          url.endsWith(`/state/${STATE_TYPE}/?format=event`),
+        url,
+      );
+    }
+  });
+});
+
+describe("trusting meeting state", () => {
+  test("state a room member sent is ignored: no mail, no write", async () => {
+    rooms.set(
+      ROOM_ID,
+      meeting({ reschedule_previous_start: Date.now() - 2 * DAY }),
+    );
+    senders.set(ROOM_ID, "@guest:example.com");
+
+    await processMeetingEmails();
+
+    assert.equal(mail().length, 0);
+    assert.equal(statePuts().length, 0);
+  });
+
+  test("a join link outside the configured base URL is not mailed", async () => {
+    rooms.set(
+      ROOM_ID,
+      meeting({
+        reschedule_previous_start: Date.now() - 2 * DAY,
+        meet_link: "https://elsewhere.example.org/phish",
+      }),
+    );
+
+    await processMeetingEmails();
+
+    assert.equal(mail().length, 0);
+    assert.equal(statePuts().length, 0);
   });
 });

@@ -472,6 +472,8 @@ export async function createMeetingRoom(body) {
           "m.room.encrypted": 50,
           "m.sticker": 50,
           "org.matrix.msc3401.call.member": 0,
+          // The worker mails what this event says; members must not edit it.
+          [MEETING_STATE_TYPE]: 100,
         },
         users: {
           [`@${BOT_USER_PREFIX}:${SERVER_NAME}`]: 100,
