@@ -95,10 +95,11 @@ const synapseCalls = (method, suffix) =>
 const caldavCalls = () => calls.filter((call) => call.target === "caldav");
 const statePut = () => synapseCalls("PUT", STATE_PATH).at(-1)?.body;
 
-function scriptState(meeting) {
-  synapse[`GET /_matrix/client/v3/rooms/:id${STATE_PATH}`] = meeting
-    ? { status: 200, data: meeting }
-    : { status: 404, data: { errcode: "M_NOT_FOUND" } };
+function scriptState(meeting, sender = "@call-bot:example.com") {
+  synapse[`GET /_matrix/client/v3/rooms/:id${STATE_PATH}?format=event`] =
+    meeting
+      ? { status: 200, data: { sender, content: meeting } }
+      : { status: 404, data: { errcode: "M_NOT_FOUND" } };
 }
 
 beforeEach(install);
@@ -158,6 +159,21 @@ describe("updateMeetingRoom merges request over stored state", () => {
     assert.equal(caldavCalls().length, 1);
     assert.equal(caldavCalls()[0].method, "PUT");
     assert.match(caldavCalls()[0].ics, /^SEQUENCE:5$/m);
+  });
+
+  test("state a room member wrote is never merged and written back", async () => {
+    scriptState(
+      storedMeeting({ prospect_email: "attacker@example.org" }),
+      "@guest:example.com",
+    );
+
+    await updateMeetingRoom(ROOM_ID, { scheduled_start: START + 3600000 });
+
+    assert.equal(synapseCalls("GET", `${STATE_PATH}?format=event`).length, 1);
+    assert.equal(statePut()?.prospect_email ?? "", "");
+    for (const call of caldavCalls()) {
+      assert.doesNotMatch(call.ics ?? "", /attacker@example\.org/);
+    }
   });
 
   test("only the countdown parameter of the join link is refreshed", async () => {
@@ -732,6 +748,12 @@ describe("createMeetingRoom", () => {
     assert.equal(created.power_level_content_override.invite, 100);
     assert.equal(created.power_level_content_override.users_default, 0);
     assert.equal(created.power_level_content_override.events_default, 0);
+    assert.equal(
+      created.power_level_content_override.events[
+        "io.element.call.scheduled_meeting"
+      ],
+      100,
+    );
   });
 
   test("a rejected calendar write never fails the room creation", async () => {

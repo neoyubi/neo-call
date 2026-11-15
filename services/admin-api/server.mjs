@@ -369,15 +369,22 @@ async function cancelCalendarEvent(bookingId) {
   }
 }
 
-// Read the current meeting state event content for a room, or null if absent.
+// Read the current meeting state event content for a room, or null if absent
+// or sent by anyone but the bot. Rooms created before the event required power
+// level 100 let members write it, and whatever this returns is merged and
+// written back as the bot, so unverified content must never get through.
 async function readMeetingState(roomId) {
   const result = await synapseRequest(
-    `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/${MEETING_STATE_TYPE}/`,
+    `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/${MEETING_STATE_TYPE}/?format=event`,
   );
-  if (result.status !== 200) {
+  if (result.status !== 200 || typeof result.data?.content !== "object") {
     return null;
   }
-  return result.data;
+  if (result.data.sender !== `@${BOT_USER_PREFIX}:${SERVER_NAME}`) {
+    console.warn("Ignoring meeting state in a room: not sent by the bot");
+    return null;
+  }
+  return result.data.content;
 }
 
 // --- Room Management ---

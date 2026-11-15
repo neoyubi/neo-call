@@ -87,8 +87,7 @@ async function getBotUserId() {
 }
 
 // Read a room's meeting state event. Returns the content object, or null if
-// the room has no such event (404 / M_NOT_FOUND), if anyone but the bot sent
-// it, or if its join link is not one of ours.
+// the room has no such event (404 / M_NOT_FOUND) or anyone but the bot sent it.
 async function getMeetingState(roomId) {
   const { status, data } = await synapseRequest(
     `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/${MEETING_STATE_TYPE}/?format=event`,
@@ -100,16 +99,17 @@ async function getMeetingState(roomId) {
     console.warn("Ignoring meeting state in a room: not sent by the bot");
     return null;
   }
-  const content = data.content;
-  if (
-    ELEMENT_CALL_BASE_URL &&
-    content.meet_link &&
-    !String(content.meet_link).startsWith(`${ELEMENT_CALL_BASE_URL}/`)
-  ) {
-    console.warn("Ignoring meeting state in a room: join link is not ours");
-    return null;
-  }
-  return content;
+  return data.content;
+}
+
+// Whether a join link may be mailed: present, and with ELEMENT_CALL_BASE_URL
+// set, under it. Only the mail paths ask; retention still purges such rooms.
+function isMailableLink(link) {
+  if (!link) return false;
+  return (
+    !ELEMENT_CALL_BASE_URL ||
+    String(link).startsWith(`${ELEMENT_CALL_BASE_URL}/`)
+  );
 }
 
 // PUT the full meeting state content back (caller passes the merged object so
@@ -322,10 +322,10 @@ export async function processMeetingEmails() {
         console.log(
           `Reschedule: marked past-end meeting notified without emailing (booking ${bookingId})`,
         );
-      } else if (!meeting.meet_link) {
-        // Without a stored link there is nothing useful to send; skip quietly.
+      } else if (!isMailableLink(meeting.meet_link)) {
+        // Without a stored link of ours there is nothing useful to send; skip quietly.
         console.warn(
-          `Reschedule: meeting has no meet_link (booking ${bookingId}); skipping`,
+          `Reschedule: meeting has no usable meet_link (booking ${bookingId}); skipping`,
         );
       } else if (MEETING_DRY_RUN) {
         console.log(
@@ -381,10 +381,10 @@ export async function processMeetingEmails() {
         );
       } else if (now >= start - reminderMinutes * 60000) {
         const meetLink = meeting.meet_link;
-        if (!meetLink) {
-          // Without a stored link there is nothing to send; skip quietly.
+        if (!isMailableLink(meetLink)) {
+          // Without a stored link of ours there is nothing to send; skip quietly.
           console.warn(
-            `Reminder: meeting has no meet_link (booking ${bookingId}); skipping`,
+            `Reminder: meeting has no usable meet_link (booking ${bookingId}); skipping`,
           );
         } else {
           const recipients = [
