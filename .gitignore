@@ -47,10 +47,10 @@ docker-compose.calldev.yml
 /blob-report/
 /playwright/.cache/
 
-# AI Agent Work (ephemeral)
+# Local working notes
 agents/
 
-# Internal deployment (not for public)
+# Deployment-specific build and config files
 scripts/push.sh
 config/config.prod.json
 config/branding/
