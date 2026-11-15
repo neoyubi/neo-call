@@ -72,11 +72,13 @@ describe("the static service credential", () => {
     assert.equal(calls.length, 0);
   });
 
-  // timingSafeEqual throws on operands of different lengths, so the length
-  // guard in front of it is load-bearing rather than an optimisation.
+  // timingSafeEqual throws on operands of different byte lengths. A key with
+  // the same number of characters but a multi-byte one is the case a plain
+  // length check misses.
   for (const [name, token] of [
     ["one byte shorter", API_KEY.slice(0, -1)],
     ["one byte longer", `${API_KEY}x`],
+    ["of equal length with a non-ASCII character", `${API_KEY.slice(0, -1)}é`],
   ]) {
     test(`a key ${name} is refused without throwing`, async () => {
       synapse({ whoami: { status: 401 } });

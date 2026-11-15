@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 
 // Authorization for /api/admin/* requests.
 //
@@ -25,11 +25,15 @@ function extractBearer(req) {
   return token.length > 0 ? token : null;
 }
 
+// Compares SHA-256 digests rather than the strings: both are always 32 bytes,
+// so timingSafeEqual cannot throw on a token whose character count matches the
+// key but whose UTF-8 byte length does not, and the key's length is not leaked.
 function matchesApiKey(token, apiKey) {
-  if (!apiKey || token.length !== apiKey.length) {
+  if (!apiKey) {
     return false;
   }
-  return timingSafeEqual(Buffer.from(token), Buffer.from(apiKey));
+  const digest = (value) => createHash("sha256").update(value, "utf8").digest();
+  return timingSafeEqual(digest(token), digest(apiKey));
 }
 
 // GET against Synapse with a caller-supplied bearer token and a 5s abort.

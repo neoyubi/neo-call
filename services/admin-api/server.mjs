@@ -900,7 +900,14 @@ const server = createServer(async (req, res) => {
 
   // 2. Authorize: static service key, or a scheduler's Matrix access token
   // verified against #schedulers membership.
-  const auth = await authorizeRequest(req, AUTH_ENV);
+  let auth;
+  try {
+    auth = await authorizeRequest(req, AUTH_ENV);
+  } catch (err) {
+    console.error("Error authorizing request:", err);
+    json(res, 500, { error: "Internal server error" }, origin);
+    return;
+  }
   if (!auth.ok) {
     console.warn(
       `Authorization failed (${auth.status}) from ${clientIp} to ${req.method} ${url.pathname}`,
