@@ -5,7 +5,7 @@ on the `livekit` (MatrixRTC + LiveKit) branch.
 
 ## Copyright, license and attribution
 
-Copyright 2021-2025 New Vector Ltd
+Copyright 2021-2026 New Vector Ltd
 
 Copyright 2026 Marwand Ayubi
 
@@ -40,30 +40,30 @@ Matrix.org Foundation C.I.C.
 
 ## What this fork adds
 
-- **Configurable branding** — product name, logo, footer, privacy policy
+- **Configurable branding**: product name, logo, footer, privacy policy
   link, source-code link, scheduled-meeting state event type, and bot
   user prefix all live in `config.json` under a `branding` key.
   Source ships with neutral defaults; deployments override at runtime.
-- **Room codes** — short alphanumeric codes per room, derived into the
+- **Room codes**: short letter codes per room, derived into the
   per-room E2EE shared key via PBKDF2 over the canonical alias. Codes
   rotate, can be revealed/copied in-call, and can be entered on the
   home page to join.
-- **Knock-based access** — rooms default to knock; hosts get an
+- **Knock-based access**: rooms default to knock; hosts get an
   approve / reject panel with notification sound.
-- **Guest registration proxy** — a separate Node service that holds
+- **Guest registration proxy**: a separate Node service that holds
   the homeserver's registration shared secret server-side, so the
   client doesn't need to walk the UIA flow for guests.
-- **Scheduled meetings** — frontend reads booking metadata from a
+- **Scheduled meetings**: frontend reads booking metadata from a
   configurable Matrix state event type and lists upcoming meetings on
   the home page with a mini-calendar view.
-- **Admin API service** — a separate Node service for booking-driven
+- **Admin API service**: a separate Node service for booking-driven
   room lifecycle (create / update / close / reopen / delete), with
   PBKDF2 key material baked into room state at creation.
-- **AGPL license footer** — discoverable Source link in the footer and
+- **AGPL license footer**: discoverable Source link in the footer and
   in a License tab in Settings.
 
-For everything else — architecture, build, dev-server setup, widget
-mode, testing — see [the upstream README](https://github.com/element-hq/element-call/blob/livekit/README.md).
+For everything else (architecture, build, dev-server setup, widget
+mode, testing), see [the upstream README](https://github.com/element-hq/element-call/blob/livekit/README.md).
 
 ## Configuring the branding
 
@@ -96,7 +96,7 @@ which is what the page `<title>` reads.
 ## Services
 
 `services/admin-api/` and `services/registration-proxy/` are
-independent Node 20 HTTP services. They are AGPL-licensed (this
+independent Node 24 HTTP services. They are AGPL-licensed (this
 repository's license applies) but share no imports with the frontend,
 so they can be deployed alongside or replaced freely. See the
 `Dockerfile` in each directory.
