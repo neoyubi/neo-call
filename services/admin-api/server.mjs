@@ -374,9 +374,17 @@ async function cancelCalendarEvent(bookingId) {
 // level 100 let members write it, and whatever this returns is merged and
 // written back as the bot, so unverified content must never get through.
 async function readMeetingState(roomId) {
-  const result = await synapseRequest(
+  return trustedMeetingContent(await requestMeetingState(roomId));
+}
+
+// The raw Synapse result for a room's meeting state event, as a full event.
+async function requestMeetingState(roomId) {
+  return await synapseRequest(
     `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/${MEETING_STATE_TYPE}/?format=event`,
   );
+}
+
+function trustedMeetingContent(result) {
   if (result.status !== 200 || typeof result.data?.content !== "object") {
     return null;
   }
@@ -847,11 +855,9 @@ function parseRoute(method, pathname) {
   return null;
 }
 
-async function getRoomInfo(roomId) {
+export async function getRoomInfo(roomId) {
   // Get room state to retrieve meeting metadata
-  const stateResult = await synapseRequest(
-    `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/${MEETING_STATE_TYPE}/`,
-  );
+  const stateResult = await requestMeetingState(roomId);
 
   if (stateResult.status !== 200) {
     return {
@@ -863,11 +869,18 @@ async function getRoomInfo(roomId) {
     };
   }
 
+  // Only state the bot wrote is meeting metadata; anything else is treated as
+  // absent, so a caller can never read it back and write it through the bot.
+  const meeting = trustedMeetingContent(stateResult);
+  if (!meeting) {
+    return { status: 404, body: { error: "Room has no meeting state" } };
+  }
+
   return {
     status: 200,
     body: {
       room_id: roomId,
-      meeting: stateResult.data,
+      meeting,
     },
   };
 }

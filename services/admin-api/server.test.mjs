@@ -21,6 +21,7 @@ const {
   createMeetingRoom,
   deleteMeetingRoom,
   getCorsHeaders,
+  getRoomInfo,
   ICS_AFFECTING_FIELDS,
   updateMeetingRoom,
 } = await import("./server.mjs");
@@ -815,5 +816,25 @@ describe("createMeetingRoom", () => {
     await service.createMeetingRoom(request);
 
     assert.equal(statePut().timezone, "Europe/Berlin");
+  });
+});
+
+describe("getRoomInfo", () => {
+  test("returns the meeting state the bot wrote", async () => {
+    scriptState(storedMeeting());
+
+    const result = await getRoomInfo(ROOM_ID);
+
+    assert.equal(result.status, 200);
+    assert.equal(result.body.meeting.key_material, "ABCD");
+  });
+
+  test("never returns meeting state a room member wrote", async () => {
+    scriptState(storedMeeting(), "@guest:example.com");
+
+    const result = await getRoomInfo(ROOM_ID);
+
+    assert.equal(result.status, 404);
+    assert.equal(result.body.meeting, undefined);
   });
 });
