@@ -8,17 +8,21 @@ Please see LICENSE in the repository root for full details.
 import {
   type CSSProperties,
   type ReactNode,
-  useCallback,
   useMemo,
+  type FC,
+  type ComponentType,
 } from "react";
-import { distinctUntilChanged } from "rxjs";
-import { useObservableEagerState } from "observable-hooks";
 
 import { type GridLayout as GridLayoutModel } from "../state/layout-types.ts";
 import styles from "./GridLayout.module.css";
-import { useInitial } from "../useInitial";
 import { type CallLayout, arrangeTiles } from "./CallLayout";
-import { type DragCallback, useUpdateLayout, useVisibleTiles } from "./Grid";
+import { type SlotProps, useUpdateLayout, useVisibleTiles } from "./Grid";
+import { useBehavior } from "../useBehavior";
+import {
+  type SpotlightTileViewModel,
+  type TileViewModel,
+} from "../state/TileViewModel.ts";
+import { type FloatingTile } from "../state/FloatingTile.ts";
 
 interface GridCSSProperties extends CSSProperties {
   "--gap": string;
@@ -26,50 +30,44 @@ interface GridCSSProperties extends CSSProperties {
   "--height": string;
 }
 
+interface SpotlightSlotProps {
+  model: FloatingTile & { vm: SpotlightTileViewModel };
+  Slot: ComponentType<SlotProps<TileViewModel>>;
+}
+
+const SpotlightSlot: FC<SpotlightSlotProps> = ({ model, Slot }) => {
+  useUpdateLayout();
+  const alignment = useBehavior(model.alignment$);
+
+  return (
+    <Slot
+      className={styles.slot}
+      id="spotlight"
+      model={model.vm}
+      onDrag={model.onDrag}
+      data-block-alignment={alignment.block}
+      data-inline-alignment={alignment.inline}
+    />
+  );
+};
+
 /**
  * An implementation of the "grid" layout, in which all participants are shown
  * together in a scrolling grid.
  */
 export const makeGridLayout: CallLayout<GridLayoutModel> = ({
   minBounds$,
-  spotlightAlignment$,
 }) => ({
-  scrollingOnTop: false,
+  foreground: "fixed",
 
   // The "fixed" (non-scrolling) part of the layout is where the spotlight tile
   // lives
   fixed: function GridLayoutFixed({ ref, model, Slot }): ReactNode {
     useUpdateLayout();
-    const alignment = useObservableEagerState(
-      useInitial(() =>
-        spotlightAlignment$.pipe(
-          distinctUntilChanged(
-            (a1, a2) => a1.block === a2.block && a1.inline === a2.inline,
-          ),
-        ),
-      ),
-    );
-
-    const onDragSpotlight: DragCallback = useCallback(
-      ({ xRatio, yRatio }) =>
-        spotlightAlignment$.next({
-          block: yRatio < 0.5 ? "start" : "end",
-          inline: xRatio < 0.5 ? "start" : "end",
-        }),
-      [],
-    );
-
     return (
       <div ref={ref} className={styles.fixed}>
         {model.spotlight && (
-          <Slot
-            className={styles.slot}
-            id="spotlight"
-            model={model.spotlight}
-            onDrag={onDragSpotlight}
-            data-block-alignment={alignment.block}
-            data-inline-alignment={alignment.inline}
-          />
+          <SpotlightSlot model={model.spotlight} Slot={Slot} />
         )}
       </div>
     );
@@ -79,7 +77,7 @@ export const makeGridLayout: CallLayout<GridLayoutModel> = ({
   scrolling: function GridLayout({ ref, model, Slot }): ReactNode {
     useUpdateLayout();
     useVisibleTiles(model.setVisibleTiles);
-    const { width, height: minHeight } = useObservableEagerState(minBounds$);
+    const { width, height: minHeight } = useBehavior(minBounds$);
     const { gap, tileWidth, tileHeight } = useMemo(
       () => arrangeTiles(width, minHeight, model.grid.length),
       [width, minHeight, model.grid.length],

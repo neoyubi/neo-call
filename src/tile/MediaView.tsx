@@ -5,43 +5,60 @@ SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
 Please see LICENSE in the repository root for full details.
 */
 
-import { type TrackReferenceOrPlaceholder } from "@livekit/components-core";
+import { type VideoMediaTrack } from "@element-hq/matrixrtc-sdk";
 import { animated } from "@react-spring/web";
-import { type FC, type ComponentProps, type ReactNode } from "react";
+import {
+  type ComponentProps,
+  type FC,
+  type ReactNode,
+  type SyntheticEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import classNames from "classnames";
-import { VideoTrack } from "@livekit/components-react";
 import { Text, Tooltip } from "@vector-im/compound-web";
 import { ErrorSolidIcon } from "@vector-im/compound-design-tokens/assets/web/icons";
 
 import styles from "./MediaView.module.css";
 import { Avatar } from "../Avatar";
-import { type EncryptionStatus } from "../state/MediaViewModel";
 import { RaisedHandIndicator } from "../reactions/RaisedHandIndicator";
 import {
-  showConnectionStats,
+  showConnectionStats as showConnectionStatsSetting,
   showHandRaisedTimer,
   useSetting,
 } from "../settings/settings";
 import { type ReactionOption } from "../reactions";
 import { ReactionIndicator } from "../reactions/ReactionIndicator";
 import { RTCConnectionStats } from "../RTCConnectionStats";
+import videoPlaceholder from "../graphics/video-placeholder.gif";
+import { autoVideoFit } from "../utils/videoFit";
+import { type Transport } from "matrix-js-sdk/lib/matrixrtc";
 
 interface Props extends ComponentProps<typeof animated.div> {
   className?: string;
   style?: ComponentProps<typeof animated.div>["style"];
   targetWidth: number;
   targetHeight: number;
-  video: TrackReferenceOrPlaceholder | undefined;
-  videoFit: "cover" | "contain";
+  video: VideoMediaTrack | undefined;
+  /**
+   * How to fit the video content inside the tile. When undefined, MediaView
+   * chooses a smart default based on the aspect ratios of the tile and video.
+   */
+  videoFit?: "cover" | "contain";
   mirror: boolean;
+  soundWaves?: boolean;
   userId: string;
   videoEnabled: boolean;
   unencryptedWarning: boolean;
-  encryptionStatus: EncryptionStatus;
+  status?: ReactNode;
+  showNameTags: boolean;
   nameTagLeadingIcon?: ReactNode;
   displayName: string;
   mxcAvatarUrl: string | undefined;
+  avatarStyle?: "solid" | "translucent";
+  background?: "solid" | "transparent";
   focusable: boolean;
   primaryButton?: ReactNode;
   raisedHandTime?: Date;
@@ -51,8 +68,15 @@ interface Props extends ComponentProps<typeof animated.div> {
   audioStreamStats?: RTCInboundRtpStreamStats | RTCOutboundRtpStreamStats;
   videoStreamStats?: RTCInboundRtpStreamStats | RTCOutboundRtpStreamStats;
   rtcBackendIdentity?: string;
-  // The focus url, mainly for debugging purposes
-  focusUrl?: string;
+  /**
+   * The member's transport, mainly for debugging purposes.
+   */
+  transport?: Transport;
+  /**
+   * Called whenever the aspect ratio of the video content becomes known or
+   * otherwise changes.
+   */
+  setVideoAspectRatio?: (ratio: number) => void;
 }
 
 export const MediaView: FC<Props> = ({
@@ -64,15 +88,19 @@ export const MediaView: FC<Props> = ({
   video,
   videoFit,
   mirror,
+  soundWaves,
   userId,
   videoEnabled,
   unencryptedWarning,
+  showNameTags,
   nameTagLeadingIcon,
   displayName,
   mxcAvatarUrl,
+  avatarStyle = "solid",
+  background = "solid",
   focusable,
   primaryButton,
-  encryptionStatus,
+  status,
   raisedHandTime,
   currentReaction,
   raisedHandOnClick,
@@ -80,14 +108,61 @@ export const MediaView: FC<Props> = ({
   audioStreamStats,
   videoStreamStats,
   rtcBackendIdentity,
-  focusUrl,
+  transport,
+  setVideoAspectRatio: setTheirVideoAspectRatio,
   ...props
 }) => {
   const { t } = useTranslation();
   const [handRaiseTimerVisible] = useSetting(showHandRaisedTimer);
-  const [showConnectioStats] = useSetting(showConnectionStats);
+  const [showConnectionStats] = useSetting(showConnectionStatsSetting);
 
-  const avatarSize = Math.round(Math.min(targetWidth, targetHeight) / 2);
+  const avatarSize = Math.round(
+    Math.min(targetWidth, targetHeight) *
+      (soundWaves === undefined ? 0.5 : 0.38),
+  );
+
+  const [videoAspectRatio, setOurVideoAspectRatio] = useState<number>(NaN);
+  const tileAspectRatio = targetWidth / targetHeight;
+
+  // Propagate video dimensions
+  const setVideoAspectRatio = (ratio: number) => {
+    setOurVideoAspectRatio(ratio);
+    setTheirVideoAspectRatio?.(ratio);
+  };
+  const videoElement = useRef<HTMLVideoElement | null>(null);
+  const videoRef = (el: HTMLVideoElement | null) => {
+    videoElement.current = el;
+    if (el !== null) setVideoAspectRatio(el.videoWidth / el.videoHeight);
+  };
+  const onResize = (ev: SyntheticEvent<HTMLVideoElement>) =>
+    setVideoAspectRatio(
+      ev.currentTarget.videoWidth / ev.currentTarget.videoHeight,
+    );
+  // The SDK plays the track on the element and watches its size, so the
+  // element has to be handed back before it leaves the DOM
+  useEffect(() => {
+    const el = videoElement.current;
+    if (video === undefined || el === null) return;
+    video.attach(el);
+    return (): void => video.detach(el);
+  }, [video]);
+
+  const warnings = unencryptedWarning && (
+    <Tooltip
+      label={t("common.unencrypted")}
+      placement="bottom"
+      isTriggerInteractive={false}
+      nonInteractiveTriggerTabIndex={focusable ? undefined : -1}
+    >
+      <ErrorSolidIcon
+        width={20}
+        height={20}
+        className={styles.errorIcon}
+        role="img"
+        aria-label={t("common.unencrypted")}
+      />
+    </Tooltip>
+  );
 
   return (
     <animated.div
@@ -97,26 +172,45 @@ export const MediaView: FC<Props> = ({
       style={style}
       ref={ref}
       data-testid="videoTile"
-      data-video-fit={videoFit}
+      data-video-enabled={video && videoEnabled}
+      data-video-fit={
+        videoFit ?? autoVideoFit(videoAspectRatio, tileAspectRatio)
+      }
+      data-background={background}
       {...props}
     >
       <div className={styles.bg}>
+        {soundWaves !== undefined && (
+          <div className={styles.waves} data-visible={soundWaves}>
+            <div className={styles.wave} />
+            <div className={styles.wave} />
+            <div className={styles.wave} />
+            <div className={styles.speakingBorder} />
+          </div>
+        )}
         <Avatar
           id={userId}
           name={displayName}
           size={avatarSize}
           src={mxcAvatarUrl}
+          data-style={avatarStyle}
           className={styles.avatar}
           style={{ display: video && videoEnabled ? "none" : "initial" }}
         />
-        {video?.publication !== undefined && (
-          <VideoTrack
-            trackRef={video}
+        {video !== undefined && (
+          // A live camera has no captions to offer
+          // eslint-disable-next-line jsx-a11y/media-has-caption
+          <video
             // There's no reason for this to be focusable
             tabIndex={-1}
             disablePictureInPicture
-            style={{ display: video && videoEnabled ? "block" : "none" }}
             data-testid="video"
+            data-source={video.source}
+            // Set the placeholder to a small transparent image. (On Android web
+            // views the default poster image is particularly ugly.)
+            poster={videoPlaceholder}
+            ref={videoRef}
+            onResize={onResize}
           />
         )}
       </div>
@@ -139,19 +233,20 @@ export const MediaView: FC<Props> = ({
         {waitingForMedia && (
           <div className={styles.status}>
             {t("video_tile.waiting_for_media")}
-            {showConnectioStats ? " " + rtcBackendIdentity : ""}
+            {showConnectionStats ? " " + rtcBackendIdentity : ""}
           </div>
         )}
-        {(audioStreamStats || videoStreamStats) && (
+        {showConnectionStats && (
           <>
             <RTCConnectionStats
               audio={audioStreamStats}
               video={videoStreamStats}
-              focusUrl={focusUrl}
+              transport={transport}
               rtcBackendIdentity={rtcBackendIdentity}
             />
           </>
         )}
+        {status && <div className={styles.status}>{status}</div>}
         {/* TODO: Bring this back once encryption status is less broken */}
         {/*encryptionStatus !== EncryptionStatus.Okay && (
             <div className={styles.status}>
@@ -167,34 +262,23 @@ export const MediaView: FC<Props> = ({
               </Text>
             </div>
           )*/}
-        <div className={styles.nameTag}>
-          {nameTagLeadingIcon}
-          <Text
-            as="span"
-            size="sm"
-            weight="medium"
-            className={styles.name}
-            data-testid="name_tag"
-          >
-            {displayName}
-          </Text>
-          {unencryptedWarning && (
-            <Tooltip
-              label={t("common.unencrypted")}
-              placement="bottom"
-              isTriggerInteractive={false}
-              nonInteractiveTriggerTabIndex={focusable ? undefined : -1}
+        {showNameTags && targetWidth >= 100 ? (
+          <div className={styles.nameTag}>
+            {nameTagLeadingIcon}
+            <Text
+              as="span"
+              size="sm"
+              weight="medium"
+              className={styles.name}
+              data-testid="name_tag"
             >
-              <ErrorSolidIcon
-                width={20}
-                height={20}
-                className={styles.errorIcon}
-                role="img"
-                aria-label={t("common.unencrypted")}
-              />
-            </Tooltip>
-          )}
-        </div>
+              {displayName}
+            </Text>
+            {warnings}
+          </div>
+        ) : (
+          warnings
+        )}
         {primaryButton}
       </div>
     </animated.div>

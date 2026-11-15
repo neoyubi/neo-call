@@ -53,12 +53,14 @@ import {
   homeRecentOpen,
 } from "../settings/settings";
 import { useUrlParams } from "../UrlParams";
+import { useBehavior } from "../useBehavior";
+import { now$ } from "../calendar/now";
 import { CodeInput } from "./CodeInput";
 import { parseRotatingCode, deriveSharedKey } from "../e2ee/deriveKeyFromCode";
 import { saveKeyMaterialForAlias } from "../e2ee/sharedKeyManagement";
 import { Config } from "../config/Config";
 import { productName } from "../branding";
-import { widget } from "../widget";
+import modalStyles from "../Modal.module.css";
 
 interface Props {
   client: MatrixClient;
@@ -66,7 +68,7 @@ interface Props {
 }
 
 export const RegisteredView: FC<Props> = ({ client, isPasswordlessUser }) => {
-  const { header } = useUrlParams();
+  const { header, isWidget } = useUrlParams();
   const { meetings, loading: meetingsLoading } = useScheduledMeetings(client);
   const [scheduling, setScheduling] = useState(false);
   const [recentOpen, setRecentOpen] = useSetting(homeRecentOpen);
@@ -75,6 +77,7 @@ export const RegisteredView: FC<Props> = ({ client, isPasswordlessUser }) => {
   const [optInAnalytics] = useOptInAnalytics();
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const now = useBehavior(now$);
   const [joinExistingCallModalOpen, setJoinExistingCallModalOpen] =
     useState(false);
   const onDismissJoinExistingCallModal = useCallback(
@@ -354,7 +357,7 @@ export const RegisteredView: FC<Props> = ({ client, isPasswordlessUser }) => {
             <UpcomingMeetings
               client={client}
               meetings={meetings}
-              featured={meetings.find((m) => Date.now() < m.scheduledEnd)}
+              featured={meetings.find((m) => now < m.scheduledEnd)}
             />
 
             {recentRooms.length > 0 && (
@@ -387,7 +390,7 @@ export const RegisteredView: FC<Props> = ({ client, isPasswordlessUser }) => {
 
             {/* A widget has no way to route anywhere but the call it was
               opened for, so the calendar is a standalone affordance. */}
-            {!widget && (
+            {!isWidget && (
               <RouterLink to="/calendar" className={styles.calendarLink}>
                 <CalendarIcon width={20} height={20} aria-hidden />
                 {t("calendar.open")}
@@ -400,6 +403,7 @@ export const RegisteredView: FC<Props> = ({ client, isPasswordlessUser }) => {
       <Modal
         title={t("schedule_meeting.title")}
         hideHeader
+        classNameModal={modalStyles.fitContent}
         open={scheduling}
         onDismiss={() => setScheduling(false)}
       >

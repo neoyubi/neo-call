@@ -6,7 +6,7 @@ SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
 Please see LICENSE in the repository root for full details.
 */
 
-import { test, vi, onTestFinished, it, describe } from "vitest";
+import { test, vi, onTestFinished, it, describe, expect } from "vitest";
 import {
   BehaviorSubject,
   combineLatest,
@@ -15,40 +15,35 @@ import {
   map,
   NEVER,
   type Observable,
-  of,
   switchMap,
 } from "rxjs";
-import { SyncState } from "matrix-js-sdk";
 import {
-  ConnectionState,
-  type LocalTrackPublication,
-  type RemoteParticipant,
-} from "livekit-client";
-import * as ComponentsCore from "@livekit/components-core";
-import {
-  Status,
   type CallMembership,
   type IRTCNotificationContent,
   MatrixRTCSessionEvent,
-  type LivekitTransport,
+  RTC_CALL_INTENT_AUDIO,
 } from "matrix-js-sdk/lib/matrixrtc";
 import { deepCompare } from "matrix-js-sdk/lib/utils";
 
 import { type Layout } from "../layout-types.ts";
 import {
-  mockLocalParticipant,
   mockMatrixRoomMember,
+  mockMediaDevices,
+  mockMuteStates,
+  flushPromises,
   mockRemoteParticipant,
   withTestScheduler,
   mockRtcMembership,
   testScope,
-  exampleTransport,
 } from "../../utils/test.ts";
 import { E2eeType } from "../../e2ee/e2eeType.ts";
 import {
+  alice,
   aliceId,
   aliceParticipant,
   aliceRtcMember,
+  aliceUserId,
+  bob,
   bobId,
   bobRtcMember,
   local,
@@ -56,12 +51,31 @@ import {
   localRtcMember,
   localRtcMemberDevice2,
 } from "../../utils/test-fixtures.ts";
-import { MediaDevices } from "../MediaDevices.ts";
+import {
+  MediaDevices,
+  type SelectedAudioOutputDevice,
+} from "../MediaDevices.ts";
 import { getValue } from "../../utils/observable.ts";
 import { type Behavior, constant } from "../Behavior.ts";
-import { withCallViewModel as withCallViewModelInMode } from "./CallViewModelTestUtils.ts";
-import { MatrixRTCMode } from "../../settings/settings.ts";
+import {
+  localParticipant,
+  type Participant,
+  withCallViewModel as withCallViewModelInMode,
+} from "./CallViewModelTestUtils.ts";
+import { MatrixRTCMode } from "../../config/ConfigOptions.ts";
 import { initializeWidget } from "../../widget.ts";
+import { computeUrlParams } from "../../UrlParams.ts";
+import {
+  callViewModelOptionsFromParams,
+  initialPublishRequests,
+} from "./CallViewModel.ts";
+import { type Handler, MuteState } from "../MuteStates.ts";
+import {
+  type LocalVideoMediaTrack,
+  type RTCParticipation,
+  type VideoProcessor,
+} from "@element-hq/matrixrtc-sdk";
+import { type BackgroundEffectsState } from "../BackgroundEffects";
 
 initializeWidget();
 
@@ -72,22 +86,13 @@ vi.mock("rxjs", async (importOriginal) => ({
   interval: (): Observable<number> => NEVER,
 }));
 
-vi.mock("@livekit/components-core");
-vi.mock("livekit-client/e2ee-worker?worker");
-
-vi.mock("../e2ee/matrixKeyProvider");
-
-const getUrlParams = vi.hoisted(() => vi.fn(() => ({})));
-vi.mock("../UrlParams", () => ({ getUrlParams }));
-
-vi.mock(
-  "../state/CallViewModel/localMember/localTransport",
-  async (importOriginal) => ({
-    ...(await importOriginal()),
-    makeTransport: async (): Promise<LivekitTransport> =>
-      Promise.resolve(exampleTransport),
-  }),
-);
+const getPlatform = vi.hoisted(() => vi.fn(() => "desktop"));
+vi.mock("../../Platform", () => ({
+  get platform(): string {
+    return getPlatform();
+  },
+  isFirefox: (): boolean => false,
+}));
 
 const yesNo = {
   y: true,
@@ -102,16 +107,7 @@ const dave = mockMatrixRoomMember(daveRtcMember, { rawDisplayName: "Dave" });
 
 const daveId = `${dave.userId}:${daveRtcMember.deviceId}`;
 
-const localParticipant = mockLocalParticipant({ identity: "" });
-const aliceSharingScreen = mockRemoteParticipant({
-  identity: aliceId,
-  isScreenShareEnabled: true,
-});
 const bobParticipant = mockRemoteParticipant({ identity: bobId });
-const bobSharingScreen = mockRemoteParticipant({
-  identity: bobId,
-  isScreenShareEnabled: true,
-});
 const daveParticipant = mockRemoteParticipant({ identity: daveId });
 
 export interface GridLayoutSummary {
@@ -138,10 +134,17 @@ export interface SpotlightExpandedLayoutSummary {
   pip?: string;
 }
 
-export interface OneOnOneLayoutSummary {
-  type: "one-on-one";
-  local: string;
-  remote: string;
+export interface OneOnOneLandscapeLayoutSummary {
+  type: "one-on-one-desktop";
+  spotlight: string;
+  pip: string;
+}
+
+export interface OneOnOnePortraitLayoutSummary {
+  type: "one-on-one-mobile";
+  spotlight: string[];
+  pip?: string;
+  pipSize: "sm" | "lg";
 }
 
 export interface PipLayoutSummary {
@@ -154,7 +157,8 @@ export type LayoutSummary =
   | SpotlightLandscapeLayoutSummary
   | SpotlightPortraitLayoutSummary
   | SpotlightExpandedLayoutSummary
-  | OneOnOneLayoutSummary
+  | OneOnOneLandscapeLayoutSummary
+  | OneOnOnePortraitLayoutSummary
   | PipLayoutSummary;
 
 function summarizeLayout$(l$: Observable<Layout>): Observable<LayoutSummary> {
@@ -164,7 +168,7 @@ function summarizeLayout$(l$: Observable<Layout>): Observable<LayoutSummary> {
         case "grid":
           return combineLatest(
             [
-              l.spotlight?.media$ ?? constant(undefined),
+              l.spotlight?.vm.media$ ?? constant(undefined),
               ...l.grid.map((vm) => vm.media$),
             ],
             (spotlight, ...grid) => ({
@@ -176,7 +180,7 @@ function summarizeLayout$(l$: Observable<Layout>): Observable<LayoutSummary> {
         case "spotlight-landscape":
         case "spotlight-portrait":
           return combineLatest(
-            [l.spotlight.media$, ...l.grid.map((vm) => vm.media$)],
+            [l.spotlight.vm.media$, ...l.grid.map((vm) => vm.media$)],
             (spotlight, ...grid) => ({
               type: l.type,
               spotlight: spotlight.map((vm) => vm.id),
@@ -185,20 +189,34 @@ function summarizeLayout$(l$: Observable<Layout>): Observable<LayoutSummary> {
           );
         case "spotlight-expanded":
           return combineLatest(
-            [l.spotlight.media$, l.pip?.media$ ?? constant(undefined)],
+            [l.spotlight.media$, l.pip?.vm.media$ ?? constant(undefined)],
             (spotlight, pip) => ({
               type: l.type,
               spotlight: spotlight.map((vm) => vm.id),
               pip: pip?.id,
             }),
           );
-        case "one-on-one":
+        case "one-on-one-desktop":
           return combineLatest(
-            [l.local.media$, l.remote.media$],
-            (local, remote) => ({
+            [l.spotlight.media$, l.pip.vm.media$],
+            (spotlight, pip) => ({
               type: l.type,
-              local: local.id,
-              remote: remote.id,
+              spotlight: spotlight.id,
+              pip: pip.id,
+            }),
+          );
+        case "one-on-one-mobile":
+          return combineLatest(
+            [
+              l.spotlight.media$,
+              l.pip?.vm.media$ ?? constant(undefined),
+              l.pip?.size$ ?? constant(undefined),
+            ],
+            (spotlight, pip, pipSize) => ({
+              type: l.type,
+              spotlight: spotlight.map((vm) => vm.id),
+              pip: pip?.id,
+              pipSize,
             }),
           );
         case "pip":
@@ -231,12 +249,60 @@ function mockRingEvent(
   } as unknown as { event_id: string } & IRTCNotificationContent;
 }
 
-describe.each([
-  [MatrixRTCMode.Legacy],
-  [MatrixRTCMode.Compatibility],
-  [MatrixRTCMode.Matrix_2_0],
-])("CallViewModel (%s mode)", (mode) => {
+const modes = [[MatrixRTCMode.Compatibility], [MatrixRTCMode.Matrix_2_0]];
+
+describe.each(modes)("CallViewModel (%s mode)", (mode) => {
   const withCallViewModel = withCallViewModelInMode(mode);
+
+  /** Media devices whose audio output the test selects. */
+  const withAudioOutput = (): {
+    mediaDevices: MediaDevices;
+    selected$: BehaviorSubject<SelectedAudioOutputDevice | undefined>;
+  } => {
+    const selected$ = new BehaviorSubject<
+      SelectedAudioOutputDevice | undefined
+    >(undefined);
+    const mediaDevices = mockMediaDevices({
+      audioOutput: {
+        available$: constant(new Map()),
+        selected$,
+        select: vi.fn(),
+      },
+    });
+    return { mediaDevices, selected$ };
+  };
+
+  test("the selected audio output is handed to the client as it changes", () => {
+    const { mediaDevices, selected$ } = withAudioOutput();
+    withCallViewModel(
+      { mediaDevices },
+      (_vm, _session, { rtcParticipation: participation }) => {
+        // Nothing selected yet, so the browser's choice stands
+        expect(participation.setAudioOutputDeviceId).not.toHaveBeenCalled();
+        selected$.next({ id: "speaker", virtualEarpiece: false });
+        expect(participation.setAudioOutputDeviceId).toHaveBeenCalledWith(
+          "speaker",
+        );
+        selected$.next({ id: "headphones", virtualEarpiece: false });
+        expect(participation.setAudioOutputDeviceId).toHaveBeenLastCalledWith(
+          "headphones",
+        );
+        expect(participation.setAudioOutputDeviceId).toHaveBeenCalledTimes(2);
+      },
+    );
+  });
+
+  test("a host that controls the audio devices keeps the output from the client", () => {
+    const { mediaDevices, selected$ } = withAudioOutput();
+    withCallViewModel(
+      { mediaDevices },
+      (_vm, _session, { rtcParticipation: participation }) => {
+        selected$.next({ id: "earpiece", virtualEarpiece: true });
+        expect(participation.setAudioOutputDeviceId).not.toHaveBeenCalled();
+      },
+      { controlledAudioDevices: true },
+    );
+  });
 
   test("participants are retained during a focus switch", () => {
     withTestScheduler(({ behavior, expectObservable }) => {
@@ -254,10 +320,7 @@ describe.each([
             b: [],
           }),
           rtcMembers$: constant([localRtcMember, aliceRtcMember, bobRtcMember]),
-          livekitConnectionState$: behavior(connectionInputMarbles, {
-            c: ConnectionState.Connected,
-            s: ConnectionState.Connecting,
-          }),
+          connected$: behavior(connectionInputMarbles, { c: true, s: false }),
         },
         (vm) => {
           expectObservable(summarizeLayout$(vm.layout$)).toBe(
@@ -275,11 +338,12 @@ describe.each([
     });
   });
 
-  test("screen sharing activates spotlight layout", () => {
+  test("remote screen sharing activates spotlight layout", () => {
     withTestScheduler(({ behavior, schedule, expectObservable }) => {
       // Start with no screen shares, then have Alice and Bob share their screens,
       // then return to no screen shares, then have just Alice share for a bit
-      const participantInputMarbles = "    abcda-ba";
+      const aliceSharingInputMarbles = "   ny-n--yn";
+      const bobSharingInputMarbles = "     n-y-n---";
       // While there are no screen shares, switch to spotlight manually, and then
       // switch back to grid at the end
       const modeInputMarbles = "           -----s--g";
@@ -290,18 +354,17 @@ describe.each([
       const expectedShowSpeakingMarbles = "y----nyny";
       withCallViewModel(
         {
-          remoteParticipants$: behavior(participantInputMarbles, {
-            a: [aliceParticipant, bobParticipant],
-            b: [aliceSharingScreen, bobParticipant],
-            c: [aliceSharingScreen, bobSharingScreen],
-            d: [aliceParticipant, bobSharingScreen],
-          }),
+          remoteParticipants$: constant([aliceParticipant, bobParticipant]),
           rtcMembers$: constant([localRtcMember, aliceRtcMember, bobRtcMember]),
+          sharingScreen: new Map([
+            [aliceParticipant, behavior(aliceSharingInputMarbles, yesNo)],
+            [bobParticipant, behavior(bobSharingInputMarbles, yesNo)],
+          ]),
         },
         (vm) => {
           schedule(modeInputMarbles, {
-            s: () => vm.setGridMode("spotlight"),
-            g: () => vm.setGridMode("grid"),
+            s: () => vm.layoutSwitchVm$.value!.setLayout("spotlight"),
+            g: () => vm.layoutSwitchVm$.value!.setLayout("grid"),
           });
 
           expectObservable(summarizeLayout$(vm.layout$)).toBe(
@@ -351,6 +414,214 @@ describe.each([
             expectedShowSpeakingMarbles,
             yesNo,
           );
+        },
+      );
+    });
+  });
+
+  test("local screen sharing stays in grid layout", () => {
+    withTestScheduler(({ behavior, expectObservable }) => {
+      // Local participant shares their screen, then stops sharing
+      const sharingInputMarbles = "  nyn";
+      // Layout should show the screen share but stay in type: "grid"
+      const expectedLayoutMarbles = "aba";
+      withCallViewModel(
+        {
+          remoteParticipants$: constant([aliceParticipant, bobParticipant]),
+          rtcMembers$: constant([localRtcMember, aliceRtcMember, bobRtcMember]),
+          sharingScreen: new Map([
+            [localParticipant, behavior(sharingInputMarbles, yesNo)],
+          ]),
+        },
+        (vm) => {
+          expectObservable(summarizeLayout$(vm.layout$)).toBe(
+            expectedLayoutMarbles,
+            {
+              a: {
+                type: "grid",
+                spotlight: undefined,
+                grid: [`${localId}:0`, `${aliceId}:0`, `${bobId}:0`],
+              },
+              b: {
+                type: "grid",
+                spotlight: [`${localId}:0:screen-share`],
+                grid: [`${localId}:0`, `${aliceId}:0`, `${bobId}:0`],
+              },
+            },
+          );
+        },
+      );
+    });
+  });
+
+  test("local screen sharing in one-on-one call activates grid layout", () => {
+    withTestScheduler(({ behavior, expectObservable }) => {
+      // Local participant shares their screen, then stops sharing
+      const sharingInputMarbles = "  nyn";
+      // Layout should switch to grid layout then back to one-on-one layout
+      const expectedLayoutMarbles = "aba";
+      withCallViewModel(
+        {
+          remoteParticipants$: constant([aliceParticipant]),
+          rtcMembers$: constant([localRtcMember, aliceRtcMember]),
+          sharingScreen: new Map([
+            [localParticipant, behavior(sharingInputMarbles, yesNo)],
+          ]),
+        },
+        (vm) => {
+          expectObservable(summarizeLayout$(vm.layout$)).toBe(
+            expectedLayoutMarbles,
+            {
+              a: {
+                type: "one-on-one-desktop",
+                pip: `${localId}:0`,
+                spotlight: `${aliceId}:0`,
+              },
+              b: {
+                type: "grid",
+                spotlight: [`${localId}:0:screen-share`],
+                grid: [`${localId}:0`, `${aliceId}:0`],
+              },
+            },
+          );
+        },
+      );
+    });
+  });
+
+  test("one-on-one mobile layout shows local tile when video is enabled", () => {
+    withTestScheduler(({ behavior, schedule, expectObservable }) => {
+      // Local participant enables their video, then disables it
+      const videoInputMarbles = "    ny--n";
+      // While tile is shown, tap the screen twice
+      const tapScreenInputMarbles = "--aa-";
+      // Layout should show local tile, make it small, enlarge it again, then hide it
+      const expectedLayoutMarbles = "abcba";
+
+      withCallViewModel(
+        {
+          remoteParticipants$: constant([aliceParticipant]),
+          roomMembers: [local, alice],
+          rtcMembers$: constant([localRtcMember, aliceRtcMember]),
+          videoEnabled: new Map([
+            [localParticipant, behavior(videoInputMarbles, yesNo)],
+          ]),
+          windowSize$: constant({ width: 380, height: 700 }), // Mobile phone in portrait
+        },
+        (vm) => {
+          schedule(tapScreenInputMarbles, { a: () => vm.tapScreen() });
+
+          expectObservable(vm.edgeToEdge$).toBe("y", yesNo); // Edge-to-edge-layout
+          expectObservable(summarizeLayout$(vm.layout$)).toBe(
+            expectedLayoutMarbles,
+            {
+              a: {
+                type: "one-on-one-mobile",
+                spotlight: [`${aliceId}:0`],
+                pip: undefined,
+                pipSize: undefined,
+              },
+              b: {
+                type: "one-on-one-mobile",
+                spotlight: [`${aliceId}:0`],
+                pip: `${localId}:0`,
+                pipSize: "lg",
+              },
+              c: {
+                type: "one-on-one-mobile",
+                spotlight: [`${aliceId}:0`],
+                pip: `${localId}:0`,
+                pipSize: "sm",
+              },
+            },
+          );
+        },
+      );
+    });
+  });
+
+  test("one-on-one mobile layout shows name tags in room with 3 members", () => {
+    withTestScheduler(({ expectObservable }) => {
+      withCallViewModel(
+        {
+          remoteParticipants$: constant([aliceParticipant]),
+          // Both Alice and Bob are with us in the room
+          roomMembers: [local, alice, bob],
+          rtcMembers$: constant([localRtcMember, aliceRtcMember]),
+          windowSize$: constant({ width: 380, height: 700 }), // Mobile phone
+        },
+        (vm) => {
+          // Uses one-on-one mobile layout
+          expectObservable(summarizeLayout$(vm.layout$)).toBe("a", {
+            a: {
+              type: "one-on-one-mobile",
+              spotlight: [`${aliceId}:0`],
+              pip: undefined,
+              pipSize: undefined,
+            },
+          });
+          // It wouldn't be clear whether Alice or Bob is the remote video tile,
+          // so the interface must put a name tag on it
+          expectObservable(vm.showNameTags$).toBe("y", yesNo);
+        },
+      );
+    });
+  });
+
+  test("landscape mobile layouts show screen shares and group call participants", () => {
+    withTestScheduler(({ behavior, expectObservable }) => {
+      // Starts as a one-on-one call, then Alice shares her screen, then Bob
+      // joins, and finally Alice stops sharing her screen
+      const participantInputMarbles = "    a--b";
+      const aliceSharingInputMarbles = "   ny-n";
+      // Starts in one-on-one mobile layout, then goes to spotlight layout for
+      // the screen sharing and group call cases
+      const expectedLayoutMarbles = "      ab-c";
+      // Whether the layout switch is visible. It should be hidden while in
+      // one-on-one layout.
+      const expectedLayoutSwitchMarbles = "ny--";
+
+      withCallViewModel(
+        {
+          remoteParticipants$: behavior(participantInputMarbles, {
+            a: [aliceParticipant],
+            b: [aliceParticipant, bobParticipant],
+          }),
+          roomMembers: [local, alice, bob],
+          rtcMembers$: behavior(participantInputMarbles, {
+            a: [localRtcMember, aliceRtcMember],
+            b: [localRtcMember, aliceRtcMember, bobRtcMember],
+          }),
+          sharingScreen: new Map([
+            [aliceParticipant, behavior(aliceSharingInputMarbles, yesNo)],
+          ]),
+          windowSize$: constant({ width: 700, height: 380 }), // Mobile phone in landscape
+        },
+        (vm) => {
+          expectObservable(summarizeLayout$(vm.layout$)).toBe(
+            expectedLayoutMarbles,
+            {
+              a: {
+                type: "one-on-one-mobile",
+                spotlight: [`${aliceId}:0`],
+                pip: undefined,
+                pipSize: undefined,
+              },
+              b: {
+                type: "spotlight-landscape",
+                spotlight: [`${aliceId}:0:screen-share`],
+                grid: [`${localId}:0`, `${aliceId}:0`],
+              },
+              c: {
+                type: "spotlight-landscape",
+                spotlight: [`${aliceId}:0`],
+                grid: [`${localId}:0`, `${bobId}:0`],
+              },
+            },
+          );
+          expectObservable(
+            vm.layoutSwitchVm$.pipe(map((vm) => vm !== null)),
+          ).toBe(expectedLayoutSwitchMarbles, yesNo);
         },
       );
     });
@@ -511,7 +782,7 @@ describe.each([
   });
 
   test("layout reacts to window size", () => {
-    withTestScheduler(({ behavior, schedule, expectObservable }) => {
+    withTestScheduler(({ behavior, expectObservable }) => {
       const windowSizeInputMarbles = "abc";
       const expectedLayoutMarbles = " abc";
       withCallViewModel(
@@ -519,7 +790,7 @@ describe.each([
           remoteParticipants$: constant([aliceParticipant]),
           rtcMembers$: constant([localRtcMember, aliceRtcMember]),
           windowSize$: behavior(windowSizeInputMarbles, {
-            a: { width: 300, height: 600 }, // Start very narrow, like a phone
+            a: { width: 380, height: 700 }, // Start very narrow, like a phone
             b: { width: 1000, height: 800 }, // Go to normal desktop window size
             c: { width: 200, height: 180 }, // Go to PiP size
           }),
@@ -530,15 +801,16 @@ describe.each([
             {
               a: {
                 // This is the expected one-on-one layout for a narrow window
-                type: "spotlight-expanded",
+                type: "one-on-one-mobile",
                 spotlight: [`${aliceId}:0`],
-                pip: `${localId}:0`,
+                pip: undefined,
+                pipSize: undefined,
               },
               b: {
-                // In a larger window, expect the normal one-on-one layout
-                type: "one-on-one",
-                local: `${localId}:0`,
-                remote: `${aliceId}:0`,
+                // In a larger window, expect the one-on-one desktop layout
+                type: "one-on-one-desktop",
+                pip: `${localId}:0`,
+                spotlight: `${aliceId}:0`,
               },
               c: {
                 // In a PiP-sized window, we of course expect a PiP layout
@@ -586,7 +858,9 @@ describe.each([
           ]),
         },
         (vm) => {
-          schedule(modeInputMarbles, { s: () => vm.setGridMode("spotlight") });
+          schedule(modeInputMarbles, {
+            s: () => vm.layoutSwitchVm$.value!.setLayout("spotlight"),
+          });
 
           expectObservable(summarizeLayout$(vm.layout$)).toBe(
             expectedLayoutMarbles,
@@ -670,6 +944,94 @@ describe.each([
     });
   });
 
+  // Test cases for footer visibility in PIP mode across different platforms
+  const PIP_FOOTER_VISIBILITY_TEST_CASES: Array<{
+    platform: "ios" | "android" | "desktop";
+    expectedMarbles: string;
+    description: string;
+  }> = [
+    {
+      platform: "ios",
+      expectedMarbles: "tf",
+      description: "hidden on iOS",
+    },
+    {
+      platform: "android",
+      expectedMarbles: "tf",
+      description: "hidden on Android",
+    },
+    {
+      platform: "desktop",
+      expectedMarbles: "t",
+      description: "visible on desktop",
+    },
+  ];
+
+  it.each(PIP_FOOTER_VISIBILITY_TEST_CASES)(
+    "footer is $description in PIP mode",
+    ({ platform: testPlatform, expectedMarbles }) => {
+      withTestScheduler(({ schedule, expectObservable }) => {
+        // Set platform for this test case
+        getPlatform.mockReturnValue(testPlatform);
+
+        // Enable PIP mode after initial render
+        const pipControlInputMarbles = "-e";
+
+        withCallViewModel(
+          {
+            remoteParticipants$: constant([aliceParticipant]),
+            rtcMembers$: constant([localRtcMember, aliceRtcMember]),
+          },
+          (vm) => {
+            schedule(pipControlInputMarbles, {
+              e: () => window.controls.enablePip(),
+            });
+
+            expectObservable(vm.showFooter$).toBe(expectedMarbles, {
+              t: true,
+              f: false,
+            });
+          },
+        );
+      });
+    },
+  );
+
+  // TODO add media to lk mocks
+  test("onPipMediaOrientationUpdate is called with the spotlight media orientation", () => {
+    // Set the spy before creating the view model so the initial call is captured
+    const onPipMediaOrientationUpdate = vi.fn();
+    window.controls.onPipMediaOrientationUpdate = onPipMediaOrientationUpdate;
+    onTestFinished(() => {
+      window.controls.onPipMediaOrientationUpdate = undefined;
+    });
+
+    withTestScheduler(({ behavior }) => {
+      // Alice starts as a regular participant, then shares her screen, then stops
+      const aliceSharingInputMarbles = "nyn";
+
+      withCallViewModel(
+        {
+          remoteParticipants$: constant([aliceParticipant]),
+          rtcMembers$: constant([localRtcMember, aliceRtcMember]),
+          sharingScreen: new Map([
+            [aliceParticipant, behavior(aliceSharingInputMarbles, yesNo)],
+          ]),
+        },
+        () => {},
+      );
+    });
+
+    // Should be called exactly 3 times:
+    // 1. Initially with "portrait" (Alice is in spotlight as a user, default portrait orientation)
+    // 2. With "landscape" when Alice starts screen sharing (screen shares always use landscape)
+    // 3. With "portrait" again when Alice stops screen sharing and returns to user tile
+    expect(onPipMediaOrientationUpdate).toHaveBeenCalledTimes(3);
+    expect(onPipMediaOrientationUpdate).toHaveBeenNthCalledWith(1, "portrait");
+    expect(onPipMediaOrientationUpdate).toHaveBeenNthCalledWith(2, "landscape");
+    expect(onPipMediaOrientationUpdate).toHaveBeenNthCalledWith(3, "portrait");
+  });
+
   test("PiP tile in expanded spotlight layout switches speakers without layout shifts", () => {
     withTestScheduler(({ behavior, schedule, expectObservable }) => {
       // Switch to spotlight immediately
@@ -686,7 +1048,7 @@ describe.each([
       withCallViewModel(
         {
           remoteParticipants$: constant([
-            aliceSharingScreen,
+            aliceParticipant,
             bobParticipant,
             daveParticipant,
           ]),
@@ -700,10 +1062,11 @@ describe.each([
             [bobParticipant, behavior(bSpeakingInputMarbles, yesNo)],
             [daveParticipant, behavior(dSpeakingInputMarbles, yesNo)],
           ]),
+          sharingScreen: new Map([[aliceParticipant, constant(true)]]),
         },
         (vm) => {
           schedule(modeInputMarbles, {
-            s: () => vm.setGridMode("spotlight"),
+            s: () => vm.layoutSwitchVm$.value!.setLayout("spotlight"),
           });
           schedule(expandInputMarbles, {
             a: () => vm.toggleSpotlightExpanded$.value!(),
@@ -748,6 +1111,90 @@ describe.each([
     });
   });
 
+  test("PiP tile in expanded spotlight layout avoids redundantly showing local user", () => {
+    withTestScheduler(({ behavior, schedule, expectObservable }) => {
+      // Switch to spotlight immediately
+      const modeInputMarbles = "       s";
+      // And expand the spotlight immediately
+      const expandInputMarbles = "     a";
+      // First no one else is in the call, then Alice joins
+      const participantInputMarbles = "ab";
+      // First local user should be in the spotlight, then they appear in PiP
+      // only once Alice has joined
+      const expectedLayoutMarbles = "  ab";
+
+      withCallViewModel(
+        {
+          rtcMembers$: behavior(participantInputMarbles, {
+            a: [localRtcMember],
+            b: [localRtcMember, aliceRtcMember],
+          }),
+          videoEnabled: new Map<Participant, Behavior<boolean>>([
+            [localParticipant, constant(true)],
+            [aliceParticipant, constant(true)],
+          ]),
+        },
+        (vm) => {
+          schedule(modeInputMarbles, {
+            s: () => vm.layoutSwitchVm$.value!.setLayout("spotlight"),
+          });
+          schedule(expandInputMarbles, {
+            a: () => vm.toggleSpotlightExpanded$.value!(),
+          });
+
+          expectObservable(summarizeLayout$(vm.layout$)).toBe(
+            expectedLayoutMarbles,
+            {
+              a: {
+                type: "spotlight-expanded",
+                spotlight: [`${localId}:0`],
+                pip: undefined,
+              },
+              b: {
+                type: "spotlight-expanded",
+                spotlight: [`${aliceId}:0`],
+                pip: `${localId}:0`,
+              },
+            },
+          );
+        },
+      );
+    });
+  });
+
+  test("expanded spotlight layout hides PiP tile in one-on-one voice call", () => {
+    withTestScheduler(({ schedule, expectObservable }) => {
+      withCallViewModel(
+        {
+          remoteParticipants$: constant([aliceParticipant]),
+          roomMembers: [local, alice],
+          rtcMembers$: constant([localRtcMember, aliceRtcMember]),
+          videoEnabled: new Map<Participant, Behavior<boolean>>([
+            [localParticipant, constant(false)],
+            [aliceParticipant, constant(false)],
+          ]),
+        },
+        (vm) => {
+          schedule("s", {
+            s: () => vm.layoutSwitchVm$.value!.setLayout("spotlight"),
+          });
+          schedule("a", {
+            a: () => vm.toggleSpotlightExpanded$.value!(),
+          });
+
+          // Layout should show remote tile only
+          expectObservable(summarizeLayout$(vm.layout$)).toBe("a", {
+            a: {
+              type: "spotlight-expanded",
+              spotlight: [`${aliceId}:0`],
+              pip: undefined,
+            },
+          });
+        },
+      );
+    });
+  });
+
   test("spotlight remembers whether it's expanded", () => {
     withTestScheduler(({ schedule, expectObservable }) => {
       // Start in spotlight mode, then switch to grid and back to spotlight a
@@ -766,8 +1213,8 @@ describe.each([
         },
         (vm) => {
           schedule(modeInputMarbles, {
-            s: () => vm.setGridMode("spotlight"),
-            g: () => vm.setGridMode("grid"),
+            s: () => vm.layoutSwitchVm$.value!.setLayout("spotlight"),
+            g: () => vm.layoutSwitchVm$.value!.setLayout("grid"),
           });
           schedule(expandInputMarbles, {
             a: () => vm.toggleSpotlightExpanded$.value!(),
@@ -784,7 +1231,7 @@ describe.each([
               b: {
                 type: "spotlight-expanded",
                 spotlight: [`${aliceId}:0`],
-                pip: `${localId}:0`,
+                pip: undefined,
               },
               c: {
                 type: "grid",
@@ -807,29 +1254,33 @@ describe.each([
     withTestScheduler(({ behavior, expectObservable }) => {
       // iterate through a number of combinations of participants and MatrixRTC memberships
       // Bob never has an MatrixRTC membership
-      const scenarioInputMarbles = " abcdec";
+      const participantInputMarbles = "abcd-c";
+      // Bob even tries to share his screen at the end
+      const bobSharingInputMarbles = " n---yn";
       // Bob should never be visible
-      const expectedLayoutMarbles = "a-bc-b";
+      const expectedLayoutMarbles = "  a-bc-b";
 
       withCallViewModel(
         {
-          remoteParticipants$: behavior(scenarioInputMarbles, {
+          remoteParticipants$: behavior(participantInputMarbles, {
             a: [],
             b: [bobParticipant],
             c: [aliceParticipant, bobParticipant],
             d: [aliceParticipant, daveParticipant, bobParticipant],
-            e: [aliceParticipant, daveParticipant, bobSharingScreen],
           }),
-          rtcMembers$: behavior(scenarioInputMarbles, {
+          rtcMembers$: behavior(participantInputMarbles, {
             a: [localRtcMember],
             b: [localRtcMember],
             c: [localRtcMember, aliceRtcMember],
             d: [localRtcMember, aliceRtcMember, daveRtcMember],
             e: [localRtcMember, aliceRtcMember, daveRtcMember],
           }),
+          sharingScreen: new Map([
+            [bobParticipant, behavior(bobSharingInputMarbles, yesNo)],
+          ]),
         },
         (vm) => {
-          vm.setGridMode("grid");
+          vm.layoutSwitchVm$.value!.setLayout("grid");
           expectObservable(summarizeLayout$(vm.layout$)).toBe(
             expectedLayoutMarbles,
             {
@@ -839,9 +1290,9 @@ describe.each([
                 grid: [`${localId}:0`],
               },
               b: {
-                type: "one-on-one",
-                local: `${localId}:0`,
-                remote: `${aliceId}:0`,
+                type: "one-on-one-desktop",
+                pip: `${localId}:0`,
+                spotlight: `${aliceId}:0`,
               },
               c: {
                 type: "grid",
@@ -872,7 +1323,7 @@ describe.each([
           }),
         },
         (vm) => {
-          vm.setGridMode("grid");
+          vm.layoutSwitchVm$.value!.setLayout("grid");
           expectObservable(summarizeLayout$(vm.layout$)).toBe(
             expectedLayoutMarbles,
             {
@@ -882,9 +1333,9 @@ describe.each([
                 grid: [`${localId}:0`],
               },
               b: {
-                type: "one-on-one",
-                local: `${localId}:0`,
-                remote: `${aliceId}:0`,
+                type: "one-on-one-desktop",
+                pip: `${localId}:0`,
+                spotlight: `${aliceId}:0`,
               },
               c: {
                 type: "grid",
@@ -892,9 +1343,9 @@ describe.each([
                 grid: [`${localId}:0`, `${aliceId}:0`, `${daveId}:0`],
               },
               d: {
-                type: "one-on-one",
-                local: `${localId}:0`,
-                remote: `${daveId}:0`,
+                type: "one-on-one-desktop",
+                pip: `${localId}:0`,
+                spotlight: `${daveId}:0`,
               },
             },
           );
@@ -976,9 +1427,9 @@ describe.each([
   function participantJoinLeave$(
     behavior: (
       marbles: string,
-      values: Record<string, RemoteParticipant[]>,
-    ) => Behavior<RemoteParticipant[]>,
-  ): Behavior<RemoteParticipant[]> {
+      values: Record<string, Participant[]>,
+    ) => Behavior<Participant[]>,
+  ): Behavior<Participant[]> {
     return behavior("a-b-c-d", {
       a: [], // Start empty
       b: [aliceParticipant], // Alice joins
@@ -1087,94 +1538,102 @@ describe.each([
     });
   });
 
-  describe("waitForCallPickup$", () => {
-    it.skip("regression test: does stop ringing in case livekitConnectionState$ emits after didSendCallNotification$ has already emitted", () => {
-      withTestScheduler(({ schedule, expectObservable, behavior }) => {
-        withCallViewModel(
-          {
-            livekitConnectionState$: behavior("d 9ms c", {
-              d: ConnectionState.Disconnected,
-              c: ConnectionState.Connected,
-            }),
-          },
-          (vm, rtcSession) => {
-            // Fire a call notification IMMEDIATELY (its important for this test, that this happens before the livekitConnectionState$ emits)
-            schedule("n", {
-              n: () => {
-                rtcSession.emit(
-                  MatrixRTCSessionEvent.DidSendCallNotification,
-                  mockRingEvent("$notif1", 30),
-                );
-              },
-            });
+  test("recipient has placeholder tile while ringing or timed out", () => {
+    withTestScheduler(({ schedule, expectObservable }) => {
+      withCallViewModel(
+        {
+          roomMembers: [alice, local], // Simulate a DM
+        },
+        (vm, rtcSession) => {
+          // Fire a ringing notification
+          schedule("n", {
+            n: () => {
+              rtcSession.emit(
+                MatrixRTCSessionEvent.DidSendCallNotification,
+                mockRingEvent("$notif1", 30),
+              );
+            },
+          });
 
-            expectObservable(vm.callPickupState$).toBe("a 9ms b 19ms c", {
-              a: "unknown",
-              b: "ringing",
-              c: "timeout",
-            });
-          },
-          {
-            waitForCallPickup: true,
-            encryptionSystem: { kind: E2eeType.PER_PARTICIPANT },
-          },
-        );
-      });
+          expectObservable(vm.ringingVm$).toBe("(ab)", {
+            a: null,
+            b: expect.objectContaining({
+              type: "ringing",
+              userId: alice.userId,
+              intent: RTC_CALL_INTENT_AUDIO,
+            }),
+          });
+          // Layout should show placeholder media for the participant we're
+          // ringing the entire time (even once timed out)
+          expectObservable(summarizeLayout$(vm.layout$)).toBe("a", {
+            a: {
+              type: "one-on-one-desktop",
+              spotlight: `${localId}:0`,
+              pip: `ringing:${aliceUserId}`,
+            },
+          });
+        },
+        { waitForCallPickup: true },
+      );
     });
+  });
 
-    it.skip("ringing -> unknown if we get disconnected", () => {
-      withTestScheduler(({ behavior, schedule, expectObservable }) => {
-        const connectionState$ = new BehaviorSubject(ConnectionState.Connected);
-        // Someone joins at 20ms (both LiveKit participant and MatrixRTC member)
-        withCallViewModel(
-          {
-            remoteParticipants$: behavior("a 19ms b", {
-              a: [],
-              b: [aliceParticipant],
-            }),
-            rtcMembers$: behavior("a 19ms b", {
-              a: [localRtcMember],
-              b: [localRtcMember, aliceRtcMember],
-            }),
-            livekitConnectionState$: connectionState$,
-          },
-          (vm, rtcSession) => {
-            // Notify at 5ms so we enter ringing, then get disconnected 5ms later
-            schedule("          5ms r 5ms d", {
-              r: () => {
-                rtcSession.emit(
-                  MatrixRTCSessionEvent.DidSendCallNotification,
-                  mockRingEvent("$notif2", 100),
-                );
-              },
-              d: () => {
-                connectionState$.next(ConnectionState.Disconnected);
-              },
-            });
+  test("recipient's placeholder tile is replaced by their real tile once they answer", () => {
+    withTestScheduler(({ behavior, schedule, expectObservable }) => {
+      withCallViewModel(
+        {
+          // Alice answers after 20ms
+          rtcMembers$: behavior("a 20ms b", {
+            a: [localRtcMember],
+            b: [localRtcMember, aliceRtcMember],
+          }),
+          roomMembers: [alice, local], // Simulate a DM
+        },
+        (vm, rtcSession) => {
+          // Fire a ringing notification
+          schedule("n", {
+            n: () => {
+              rtcSession.emit(
+                MatrixRTCSessionEvent.DidSendCallNotification,
+                mockRingEvent("$notif1", 30),
+              );
+            },
+          });
 
-            expectObservable(vm.callPickupState$).toBe("a 4ms b 5ms c", {
-              a: "unknown",
-              b: "ringing",
-              c: "unknown",
-            });
-          },
-          {
-            waitForCallPickup: true,
-            encryptionSystem: { kind: E2eeType.PER_PARTICIPANT },
-          },
-        );
-      });
+          // Should ring until Alice joins
+          expectObservable(vm.ringingVm$).toBe("(ab) 17ms a", {
+            a: null,
+            b: expect.objectContaining({
+              type: "ringing",
+              userId: alice.userId,
+              intent: RTC_CALL_INTENT_AUDIO,
+            }),
+          });
+          // Layout should show placeholder media for the participant we're
+          // ringing the entire time
+          expectObservable(summarizeLayout$(vm.layout$)).toBe("a 20ms b", {
+            a: {
+              type: "one-on-one-desktop",
+              spotlight: `${localId}:0`,
+              pip: `ringing:${aliceUserId}`,
+            },
+            b: {
+              type: "one-on-one-desktop",
+              spotlight: `${aliceId}:0`,
+              pip: `${localId}:0`,
+            },
+          });
+        },
+        { waitForCallPickup: true },
+      );
     });
   });
 
   it.skip("audio output changes when toggling earpiece mode", () => {
     withTestScheduler(({ schedule, expectObservable }) => {
-      getUrlParams.mockReturnValue({ controlledAudioDevices: true });
-      vi.mocked(ComponentsCore.createMediaDeviceObserver).mockReturnValue(
-        of([]),
-      );
-
-      const devices = new MediaDevices(testScope());
+      const devices = new MediaDevices(testScope(), {
+        controlledAudioDevices: true,
+      });
 
       window.controls.setAvailableAudioDevices([
         { id: "speaker", name: "Speaker", isSpeaker: true },
@@ -1203,76 +1662,150 @@ describe.each([
       });
     });
   });
+});
 
-  it.skip("media tracks are paused while reconnecting to MatrixRTC", () => {
-    withTestScheduler(({ schedule, expectObservable }) => {
-      const trackRunning$ = new BehaviorSubject(true);
-      const originalPublications = localParticipant.trackPublications;
-      localParticipant.trackPublications = new Map([
-        [
-          "video",
-          {
-            track: new (class {
-              public get isUpstreamPaused(): boolean {
-                return !trackRunning$.value;
-              }
-              public async pauseUpstream(): Promise<void> {
-                trackRunning$.next(false);
-                return Promise.resolve();
-              }
-              public async resumeUpstream(): Promise<void> {
-                trackRunning$.next(true);
-                return Promise.resolve();
-              }
-            })(),
-          } as unknown as LocalTrackPublication,
-        ],
-      ]);
-      onTestFinished(() => {
-        localParticipant.trackPublications = originalPublications;
-      });
+describe("callViewModelOptionsFromParams", () => {
+  // The defaults on CallViewModelOptions describe a standalone Element Call, so
+  // a widget caller that drops one of these gets standalone behaviour rather
+  // than an error. These check the whole chain from URL to options, which is
+  // where that went wrong for the SDK.
+  const widgetUrl = (extra: string): string =>
+    `#?widgetId=id&parentUrl=${encodeURIComponent("http://parent")}&${extra}`;
 
-      // There are three indicators that the client might be disconnected from
-      // MatrixRTC: whether the sync loop is connected, whether the membership is
-      // present in local room state, and whether the membership manager thinks
-      // we've hit the timeout for the delayed leave event. Let's test all
-      // combinations of these conditions.
-      const syncingMarbles = "             nyny----n--y";
-      const membershipStatusMarbles = "    y---ny-n-yn-y";
-      const probablyLeftMarbles = "        n-----y-ny---n";
-      const expectedReconnectingMarbles = "n-ynyny------n";
-      const expectedTrackRunningMarbles = "nynynyn------y";
+  it("carries hideScreensharing", () => {
+    const params = computeUrlParams("", widgetUrl("hideScreensharing=true"));
+    expect(callViewModelOptionsFromParams(params).hideScreensharing).toBe(true);
+  });
+});
 
-      withCallViewModel(
-        { initialSyncState: SyncState.Reconnecting },
-        (vm, rtcSession, _subjects, setSyncState) => {
-          schedule(syncingMarbles, {
-            y: () => setSyncState(SyncState.Syncing),
-            n: () => setSyncState(SyncState.Reconnecting),
-          });
-          schedule(membershipStatusMarbles, {
-            y: () => {
-              rtcSession.membershipStatus = Status.Connected;
-            },
-          });
-          schedule(probablyLeftMarbles, {
-            y: () => {
-              rtcSession.probablyLeft = true;
-            },
-            n: () => {
-              rtcSession.probablyLeft = false;
-            },
-          });
-          expectObservable(vm.reconnecting$).toBe(
-            expectedReconnectingMarbles,
-            yesNo,
-          );
-          expectObservable(trackRunning$).toBe(
-            expectedTrackRunningMarbles,
-            yesNo,
-          );
+describe("a camera with a video processor", () => {
+  const withCallViewModel = withCallViewModelInMode(MatrixRTCMode.Matrix_2_0);
+  const processor = { name: "effect" } as VideoProcessor;
+
+  /** The handler the view model gives the camera's mute switch. */
+  const cameraHandler = (setHandler: {
+    mock: { calls: [Handler][] };
+  }): Handler => setHandler.mock.calls[1][0];
+
+  it("starts each camera track with the processor", () => {
+    const muteStates = mockMuteStates();
+    vi.spyOn(muteStates.video.enabled$, "value", "get").mockReturnValue(true);
+    expect(
+      initialPublishRequests(
+        muteStates,
+        mockMediaDevices({}),
+        {},
+        { supported: true, processor },
+      ).find((request) => request.source === "camera"),
+    ).toMatchObject({ processor });
+  });
+
+  it("leaves the camera out of the join while the processor is prepared", () => {
+    const muteStates = mockMuteStates();
+    vi.spyOn(muteStates.video.enabled$, "value", "get").mockReturnValue(true);
+    const sources = (wait?: "preparing"): string[] =>
+      initialPublishRequests(
+        muteStates,
+        mockMediaDevices({}),
+        {},
+        {
+          supported: true,
+          processor: undefined,
+          wait,
         },
-      );
+      ).map((request) => request.source);
+    expect(sources("preparing")).not.toContain("camera");
+    expect(sources()).toContain("camera");
+  });
+
+  it("waits to make a camera track until it is known the processor builds", async () => {
+    const setHandler = vi.spyOn(MuteState.prototype, "setHandler");
+    onTestFinished(() => setHandler.mockRestore());
+    const effects$ = new BehaviorSubject<BackgroundEffectsState>({
+      supported: true,
+      processor: undefined,
+      wait: "preparing",
     });
+    let participation: RTCParticipation | undefined;
+    withCallViewModel(
+      {},
+      (_vm, _session, { rtcParticipation }) => {
+        participation = rtcParticipation;
+      },
+      { backgroundEffectsState$: effects$ },
+    );
+    const camera = participation!.localMember$.value?.tracks$.value?.find(
+      (track) => track.source === "camera",
+    ) as LocalVideoMediaTrack;
+    const turnedOn = cameraHandler(setHandler)(true);
+    await flushPromises();
+    expect(camera.setEnabled).not.toHaveBeenCalledWith(true);
+
+    effects$.next({ supported: true, processor });
+    await turnedOn;
+    expect(camera.setEnabled).toHaveBeenCalledWith(true);
+    expect(participation!.publish).not.toHaveBeenCalled();
+  });
+
+  it("turns the camera on only once its processor is on the track", async () => {
+    const setHandler = vi.spyOn(MuteState.prototype, "setHandler");
+    onTestFinished(() => setHandler.mockRestore());
+    const effects$ = new BehaviorSubject<BackgroundEffectsState>({
+      supported: true,
+      processor: undefined,
+      wait: "preparing",
+    });
+    let participation: RTCParticipation | undefined;
+    withCallViewModel(
+      {},
+      (_vm, _session, { rtcParticipation }) => {
+        participation = rtcParticipation;
+      },
+      { backgroundEffectsState$: effects$ },
+    );
+    const camera = participation!.localMember$.value?.tracks$.value?.find(
+      (track) => track.source === "camera",
+    ) as LocalVideoMediaTrack;
+    // Attaching takes its time, as the pipeline is built on the track
+    let attached!: () => void;
+    vi.mocked(camera.setProcessor).mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        attached = resolve;
+      }),
+    );
+    const turnedOn = cameraHandler(setHandler)(true);
+    effects$.next({ supported: true, processor });
+    await flushPromises();
+    expect(camera.setProcessor).toHaveBeenCalledWith(processor);
+    expect(camera.setEnabled).not.toHaveBeenCalledWith(true);
+
+    attached();
+    await turnedOn;
+    expect(camera.setEnabled).toHaveBeenCalledWith(true);
+  });
+
+  // The SDK builds the processor on the camera's restart, before the room
+  // sees a frame, so the track is unmuted rather than published anew
+  it("turns on a camera turned off before the processor was chosen", async () => {
+    const setHandler = vi.spyOn(MuteState.prototype, "setHandler");
+    onTestFinished(() => setHandler.mockRestore());
+    const effects$ = new BehaviorSubject<BackgroundEffectsState>({
+      supported: true,
+      processor: undefined,
+    });
+    let participation: RTCParticipation | undefined;
+    withCallViewModel(
+      {},
+      (_vm, _session, { rtcParticipation }) => {
+        participation = rtcParticipation;
+      },
+      { backgroundEffectsState$: effects$ },
+    );
+    effects$.next({ supported: true, processor });
+    await cameraHandler(setHandler)(true);
+    await flushPromises();
+
+    expect(participation!.unpublish).not.toHaveBeenCalled();
+    expect(participation!.publish).not.toHaveBeenCalled();
   });
 });

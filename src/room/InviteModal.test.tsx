@@ -22,6 +22,7 @@ test("InviteModal is accessible", async () => {
   const room = {
     roomId: "!a:example.org",
     name: "Mission Control",
+    getCanonicalAlias: () => null,
   } as unknown as Room;
   const onDismiss = vi.fn();
   const { container } = render(

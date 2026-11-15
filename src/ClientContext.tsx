@@ -16,14 +16,13 @@ import {
   useMemo,
   type JSX,
 } from "react";
-import { useNavigate } from "react-router-dom";
 import { logger } from "matrix-js-sdk/lib/logger";
 import { type ISyncStateData, type SyncState } from "matrix-js-sdk/lib/sync";
 import { ClientEvent, type MatrixClient } from "matrix-js-sdk";
 
-import type { WidgetApi } from "matrix-widget-api";
 import { ErrorPage } from "./FullScreenView";
-import { widget } from "./widget";
+import { useHostBridge } from "./HostBridge";
+import { useLeaveToHome } from "./LeaveToHomeContext";
 import {
   PosthogAnalytics,
   RegistrationType,
@@ -48,7 +47,6 @@ export type ValidClientState = {
   disconnected: boolean;
   supportedFeatures: {
     reactions: boolean;
-    thumbnails: boolean;
   };
   setClient: (client: MatrixClient, session: Session) => void;
 };
@@ -135,25 +133,84 @@ const loadChannel =
 
 interface Props {
   children: JSX.Element;
+  /**
+   * The client Element Call should use.
+   *
+   * An application hosting Element Call as a component already has a client,
+   * and owns the user's session; supplying it here means Element Call neither
+   * authenticates anyone nor manages their session. Left out, Element Call finds a client
+   * itself — from the widget API, or by restoring or creating a session of its
+   * own.
+   */
+  client?: MatrixClient;
+  /**
+   * How Element Call finds a client when none is supplied: the standalone app
+   * restores or creates a session of its own. Stable, as a hook dependency.
+   * Left out along with the client, no one is signed in.
+   *
+   * A prop, rather than this module importing `utils/spa` itself, because:
+   * - This module is in the component build, and so is everything it imports,
+   *   dynamically or not: a dynamic import becomes a chunk in the package,
+   *   not a module left out of it.
+   * - Behind `utils/spa` sits `utils/initClient` and the client store worker,
+   *   which the bundler emits as soon as it loads the import (see there).
+   * - `App.tsx`, which the component never imports, is where the standalone
+   *   app passes the loader in; the component passes nothing, having the
+   *   host's client.
+   */
+  loadClient?: ClientLoader;
 }
 
-export const ClientProvider: FC<Props> = ({ children }) => {
-  const navigate = useNavigate();
+/**
+ * Restores or creates a session of Element Call's own, kept where the given
+ * functions keep it. Resolves to null when no one is signed in.
+ */
+export type ClientLoader = (
+  loadSession: () => Session | undefined,
+  clearSession: () => void,
+) => Promise<InitResult | null>;
+
+export const ClientProvider: FC<Props> = ({ children, client, loadClient }) => {
+  const leaveToHome = useLeaveToHome();
+  const hostBridge = useHostBridge();
 
   // null = signed out, undefined = loading
   const [initClientState, setInitClientState] = useState<
     InitResult | null | undefined
-  >(undefined);
+  >(
+    client === undefined
+      ? undefined
+      : // A supplied client belongs to the host, so there is no session of ours
+        // to restore and nothing to wait for.
+        { client, passwordlessUser: false },
+  );
 
   const initializing = useRef(false);
   useEffect(() => {
+    if (client !== undefined) {
+      // Nothing to load, but a host may hand us a different client later — on
+      // re-authenticating, say — so follow whichever one it has given us.
+      setInitClientState((current) =>
+        current?.client === client
+          ? current
+          : { client, passwordlessUser: false },
+      );
+      // Analytics still need to follow the user's choices.
+      if (PosthogAnalytics.instance.isEnabled())
+        PosthogAnalytics.instance.startListeningToSettingsChanges();
+      return;
+    }
     // In case the component is mounted, unmounted, and remounted quickly (as
     // React does in strict mode), we need to make sure not to doubly initialize
     // the client.
     if (initializing.current) return;
+    if (loadClient === undefined) {
+      setInitClientState(null);
+      return;
+    }
     initializing.current = true;
 
-    loadClient()
+    loadClient(loadSession, clearSession)
       .then((initResult) => {
         setInitClientState(initResult);
         if (PosthogAnalytics.instance.isEnabled())
@@ -161,7 +218,7 @@ export const ClientProvider: FC<Props> = ({ children }) => {
       })
       .catch((err) => logger.error(err))
       .finally(() => (initializing.current = false));
-  }, []);
+  }, [client, loadClient]);
 
   const changePassword = useCallback(
     async (password: string) => {
@@ -202,7 +259,6 @@ export const ClientProvider: FC<Props> = ({ children }) => {
 
       saveSession(session);
       setInitClientState({
-        widgetApi: null,
         client,
         passwordlessUser: session.passwordlessUser,
       });
@@ -222,18 +278,20 @@ export const ClientProvider: FC<Props> = ({ children }) => {
     await client.clearStores();
     clearSession();
     setInitClientState(null);
-    await navigate("/");
+    leaveToHome?.();
     PosthogAnalytics.instance.logout();
     PosthogAnalytics.instance.setRegistrationType(RegistrationType.Guest);
-  }, [navigate, initClientState?.client]);
+  }, [leaveToHome, initClientState?.client]);
 
   // To protect against multiple sessions writing to the same storage
   // simultaneously, we send a broadcast message that shuts down all other
-  // running instances of the app. This isn't necessary if the app is running in
-  // a widget though, since then it'll be mostly stateless.
+  // running instances of the app. Element Call only has storage of its own to
+  // protect when it created the session itself; given a client — by a host, or
+  // over the widget API — it is mostly stateless.
+  const ownsSession = client === undefined;
   useEffect(() => {
-    if (!widget) loadChannel?.postMessage({});
-  }, []);
+    if (ownsSession) loadChannel?.postMessage({});
+  }, [ownsSession]);
 
   const [alreadyOpenedErr, setAlreadyOpenedErr] = useState<Error | undefined>(
     undefined,
@@ -249,7 +307,6 @@ export const ClientProvider: FC<Props> = ({ children }) => {
 
   const [isDisconnected, setIsDisconnected] = useState(false);
   const [supportsReactions, setSupportsReactions] = useState(false);
-  const [supportsThumbnails, setSupportsThumbnails] = useState(false);
 
   const state: ClientState | undefined = useMemo(() => {
     if (alreadyOpenedErr) {
@@ -275,7 +332,6 @@ export const ClientProvider: FC<Props> = ({ children }) => {
       disconnected: isDisconnected,
       supportedFeatures: {
         reactions: supportsReactions,
-        thumbnails: supportsThumbnails,
       },
     };
   }, [
@@ -286,7 +342,6 @@ export const ClientProvider: FC<Props> = ({ children }) => {
     setClient,
     isDisconnected,
     supportsReactions,
-    supportsThumbnails,
   ]);
 
   const onSync = useCallback(
@@ -311,68 +366,28 @@ export const ClientProvider: FC<Props> = ({ children }) => {
       initClientState.client.on(ClientEvent.Sync, onSync);
     }
 
-    if (initClientState.widgetApi) {
-      // There is currently no widget API for authenticated media thumbnails.
-      setSupportsThumbnails(false);
-      const reactSend = initClientState.widgetApi.hasCapability(
-        "org.matrix.msc2762.send.event:m.reaction",
-      );
-      const redactSend = initClientState.widgetApi.hasCapability(
-        "org.matrix.msc2762.send.event:m.room.redaction",
-      );
-      const reactRcv = initClientState.widgetApi.hasCapability(
-        "org.matrix.msc2762.receive.event:m.reaction",
-      );
-      const redactRcv = initClientState.widgetApi.hasCapability(
-        "org.matrix.msc2762.receive.event:m.room.redaction",
-      );
-
-      if (!reactSend || !reactRcv || !redactSend || !redactRcv) {
-        logger.warn("Widget does not support reactions");
-        setSupportsReactions(false);
-      } else {
-        setSupportsReactions(true);
-      }
-    } else {
-      setSupportsReactions(true);
-      setSupportsThumbnails(true);
-    }
+    if (!hostBridge.supportsReactions)
+      logger.warn("The host does not permit reactions");
+    setSupportsReactions(hostBridge.supportsReactions);
 
     return (): void => {
       if (initClientState.client) {
         initClientState.client.removeListener(ClientEvent.Sync, onSync);
       }
     };
-  }, [initClientState, onSync]);
+  }, [initClientState, onSync, hostBridge]);
 
   if (alreadyOpenedErr) {
-    return <ErrorPage widget={widget} error={alreadyOpenedErr} />;
+    return <ErrorPage error={alreadyOpenedErr} />;
   }
 
   return <ClientContext value={state}>{children}</ClientContext>;
 };
 
 export type InitResult = {
-  widgetApi: WidgetApi | null;
   client: MatrixClient;
   passwordlessUser: boolean;
 };
-
-async function loadClient(): Promise<InitResult | null> {
-  if (widget) {
-    // We're inside a widget, so let's engage *matryoshka mode*
-    logger.log("Using a matryoshka client");
-    const client = await widget.client;
-    return {
-      widgetApi: widget.api,
-      client,
-      passwordlessUser: false,
-    };
-  } else {
-    const { initSPA } = await import("./utils/spa");
-    return initSPA(loadSession, clearSession);
-  }
-}
 
 export interface Session {
   user_id: string;

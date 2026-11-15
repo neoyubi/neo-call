@@ -8,10 +8,14 @@ Please see LICENSE in the repository root for full details.
 import { BehaviorSubject } from "rxjs";
 import { logger } from "matrix-js-sdk/lib/logger";
 
-import { type MediaViewModel, type UserMediaViewModel } from "./MediaViewModel";
 import { GridTileViewModel, SpotlightTileViewModel } from "./TileViewModel";
 import { fillGaps } from "../utils/iter";
 import { debugTileLayout } from "../settings/settings";
+import { type MediaViewModel } from "./media/MediaViewModel";
+import { type UserMediaViewModel } from "./media/UserMediaViewModel";
+import { type RingingMediaViewModel } from "./media/RingingMediaViewModel";
+
+type SpotlightBackground = "solid" | "transparent";
 
 function debugEntries(entries: GridTileData[]): string[] {
   return entries.map((e) => e.media.displayName$.value);
@@ -37,18 +41,37 @@ class SpotlightTileData {
     this.maximised$.next(value);
   }
 
+  private readonly background$: BehaviorSubject<SpotlightBackground>;
+  public get background(): SpotlightBackground {
+    return this.background$.value;
+  }
+  public set background(value: SpotlightBackground) {
+    this.background$.next(value);
+  }
+
   public readonly vm: SpotlightTileViewModel;
 
-  public constructor(media: MediaViewModel[], maximised: boolean) {
+  public constructor(
+    media: MediaViewModel[],
+    maximised: boolean,
+    background: SpotlightBackground,
+  ) {
     this.media$ = new BehaviorSubject(media);
     this.maximised$ = new BehaviorSubject(maximised);
-    this.vm = new SpotlightTileViewModel(this.media$, this.maximised$);
+    this.background$ = new BehaviorSubject(background);
+    this.vm = new SpotlightTileViewModel(
+      this.media$,
+      this.maximised$,
+      this.background$,
+    );
   }
 }
 
 class GridTileData {
-  private readonly media$: BehaviorSubject<UserMediaViewModel>;
-  public get media(): UserMediaViewModel {
+  private readonly media$: BehaviorSubject<
+    UserMediaViewModel | RingingMediaViewModel
+  >;
+  public get media(): UserMediaViewModel | RingingMediaViewModel {
     return this.media$.value;
   }
   public set media(value: UserMediaViewModel) {
@@ -57,7 +80,7 @@ class GridTileData {
 
   public readonly vm: GridTileViewModel;
 
-  public constructor(media: UserMediaViewModel) {
+  public constructor(media: UserMediaViewModel | RingingMediaViewModel) {
     this.media$ = new BehaviorSubject(media);
     this.vm = new GridTileViewModel(this.media$);
   }
@@ -127,9 +150,9 @@ export class TileStoreBuilder {
   private numGridEntries = 0;
   // A sparse array of grid entries which should be kept in the same spots as
   // which they appeared in the previous grid
-  private readonly stationaryGridEntries: GridTileData[] = new Array(
-    this.prevGrid.length,
-  );
+  private readonly stationaryGridEntries: GridTileData[] = Array.from({
+    length: this.prevGrid.length,
+  });
   // Grid entries which should now enter the visible section of the grid
   private readonly visibleGridEntries: GridTileData[] = [];
   // Grid entries which should now enter the invisible section of the grid
@@ -153,7 +176,11 @@ export class TileStoreBuilder {
    * Sets the contents of the spotlight tile. If this is never called, there
    * will be no spotlight tile.
    */
-  public registerSpotlight(media: MediaViewModel[], maximised: boolean): void {
+  public registerSpotlight(
+    media: MediaViewModel[],
+    maximised: boolean,
+    background: SpotlightBackground = "solid",
+  ): void {
     if (DEBUG_ENABLED)
       logger.debug(
         `[TileStore, ${this.generation}] register spotlight: ${media.map((m) => m.displayName$.value)}`,
@@ -165,11 +192,12 @@ export class TileStoreBuilder {
 
     // Reuse the previous spotlight tile if it exists
     if (this.prevSpotlight === null) {
-      this.spotlight = new SpotlightTileData(media, maximised);
+      this.spotlight = new SpotlightTileData(media, maximised, background);
     } else {
       this.spotlight = this.prevSpotlight;
       this.spotlight.media = media;
       this.spotlight.maximised = maximised;
+      this.spotlight.background = background;
     }
   }
 
@@ -177,7 +205,9 @@ export class TileStoreBuilder {
    * Sets up a grid tile for the given media. If this is never called for some
    * media, then that media will have no grid tile.
    */
-  public registerGridTile(media: UserMediaViewModel): void {
+  public registerGridTile(
+    media: UserMediaViewModel | RingingMediaViewModel,
+  ): void {
     if (DEBUG_ENABLED)
       logger.debug(
         `[TileStore, ${this.generation}] register grid tile: ${media.displayName$.value}`,
@@ -186,7 +216,11 @@ export class TileStoreBuilder {
     if (this.spotlight !== null) {
       // We actually *don't* want spotlight speakers to appear in both the
       // spotlight and the grid, so they're filtered out here
-      if (!media.local && this.spotlight.media.includes(media)) return;
+      if (
+        !(media.type === "user" && media.local) &&
+        this.spotlight.media.includes(media)
+      )
+        return;
       // When the spotlight speaker changes, we would see one grid tile appear
       // and another grid tile disappear. This would be an undesirable layout
       // shift, so instead what we do is take the speaker's grid tile and swap

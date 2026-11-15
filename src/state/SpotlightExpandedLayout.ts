@@ -10,24 +10,27 @@ import {
   type SpotlightExpandedLayoutMedia,
 } from "./layout-types";
 import { type TileStore } from "./TileStore";
+import { type FloatingTile } from "./FloatingTile";
 
 /**
  * Produces an expanded spotlight layout with the given media.
  */
 export function spotlightExpandedLayout(
   media: SpotlightExpandedLayoutMedia,
+  pipTile: FloatingTile,
   prevTiles: TileStore,
 ): [SpotlightExpandedLayout, TileStore] {
   const update = prevTiles.from(1);
-  update.registerSpotlight(media.spotlight, true);
+  update.registerSpotlight(media.spotlight, true, "transparent");
   if (media.pip !== undefined) update.registerPipTile(media.pip);
   const tiles = update.build();
 
+  const pipVm = tiles.gridTiles.at(0);
   return [
     {
       type: media.type,
       spotlight: tiles.spotlightTile!,
-      pip: tiles.gridTiles[0],
+      pip: pipVm && { vm: pipVm, ...pipTile },
     },
     tiles,
   ];

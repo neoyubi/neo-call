@@ -24,6 +24,7 @@ import { Heading, Glass } from "@vector-im/compound-web";
 import styles from "./Modal.module.css";
 import overlayStyles from "./Overlay.module.css";
 import { useMediaQuery } from "./useMediaQuery";
+import { useRootElement } from "./RootElementContext";
 
 export interface Props {
   title: string;
@@ -78,6 +79,7 @@ export const Modal: FC<Props> = ({
   ...rest
 }) => {
   const { t } = useTranslation();
+  const rootElement = useRootElement();
   // Empirically, Chrome on Android can end up not matching (hover: none), but
   // still matching (pointer: coarse) :/
   const touchscreen = useMediaQuery("(hover: none) or (pointer: coarse)");
@@ -92,10 +94,15 @@ export const Modal: FC<Props> = ({
     return (
       <Drawer.Root
         open={open}
+        // This autofocus is a custom vault property and not the
+        // standard HTML autofocus attribute.
+        // It makes the Drawer.Root behave like the `DialogRoot`
+        // eslint-disable-next-line jsx-a11y/no-autofocus
+        autoFocus
         onOpenChange={onOpenChange}
         dismissible={onDismiss !== undefined}
       >
-        <Drawer.Portal>
+        <Drawer.Portal container={rootElement}>
           <Drawer.Overlay className={classNames(overlayStyles.bg)} />
           <Drawer.Content
             className={classNames(
@@ -150,9 +157,15 @@ export const Modal: FC<Props> = ({
 
     return (
       <DialogRoot open={open} onOpenChange={onOpenChange}>
-        <DialogPortal>
+        <DialogPortal container={rootElement}>
           <DialogOverlay
             className={classNames(overlayStyles.bg, overlayStyles.animate)}
+            // Radix dismisses on a pointer down outside the dialog, but only
+            // for event targets that are a `Node` of the window it was loaded
+            // in. A host can move the dialog into another window (a Document
+            // Picture-in-Picture window), whose nodes fail that check, so the
+            // backdrop closes the dialog itself.
+            onClick={() => onDismiss?.()}
           />
           <DialogContent
             asChild

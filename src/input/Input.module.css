@@ -214,14 +214,6 @@ inside it would be laid out beside the input and collide with the label. */
   border-color: var(--cpd-color-border-disabled);
 }
 
-.checkbox svg {
-  display: none;
-}
-
-.checkbox svg * {
-  stroke: var(--stopgap-color-on-solid-accent);
-}
-
 .checkboxField input[type="checkbox"]:checked + label > .checkbox {
   background: var(--cpd-color-text-action-accent);
   border-color: var(--cpd-color-text-action-accent);

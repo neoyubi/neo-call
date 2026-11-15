@@ -13,10 +13,18 @@ import { type FC, type PropsWithChildren } from "react";
 import { ClientContextProvider } from "./ClientContext";
 import { Avatar } from "./Avatar";
 import { mockMatrixRoomMember, mockRtcMembership } from "./utils/test";
+import {
+  type HostBridge,
+  HostBridgeProvider,
+  nullHostBridge,
+} from "./HostBridge";
 
 const TestComponent: FC<
-  PropsWithChildren<{ client: MatrixClient; supportsThumbnails?: boolean }>
-> = ({ client, children, supportsThumbnails }) => {
+  PropsWithChildren<{
+    client: MatrixClient;
+    hostBridge?: HostBridge;
+  }>
+> = ({ client, hostBridge = nullHostBridge, children }) => {
   return (
     <ClientContextProvider
       value={{
@@ -24,7 +32,6 @@ const TestComponent: FC<
         disconnected: false,
         supportedFeatures: {
           reactions: true,
-          thumbnails: supportsThumbnails ?? true,
         },
         setClient: vi.fn(),
         authenticated: {
@@ -35,7 +42,7 @@ const TestComponent: FC<
         },
       }}
     >
-      {children}
+      <HostBridgeProvider value={hostBridge}>{children}</HostBridgeProvider>
     </ClientContextProvider>
   );
 };
@@ -73,36 +80,7 @@ test("should just render a placeholder when the user has no avatar", () => {
   expect(client.mxcUrlToHttp).toBeCalledTimes(0);
 });
 
-test("should just render a placeholder when thumbnails are not supported", () => {
-  const client = vi.mocked<MatrixClient>({
-    getAccessToken: () => "my-access-token",
-    mxcUrlToHttp: () => vi.fn(),
-  } as unknown as MatrixClient);
-
-  vi.spyOn(client, "mxcUrlToHttp");
-  const member = mockMatrixRoomMember(
-    mockRtcMembership("@alice:example.org", "AAAA"),
-    {
-      getMxcAvatarUrl: () => "mxc://example.org/alice-avatar",
-    },
-  );
-  const displayName = "Alice";
-  render(
-    <TestComponent client={client} supportsThumbnails={false}>
-      <Avatar
-        id={member.userId}
-        name={displayName}
-        size={96}
-        src={member.getMxcAvatarUrl()}
-      />
-    </TestComponent>,
-  );
-  const element = screen.getByRole("img", { name: "@alice:example.org" });
-  expect(element.tagName).toEqual("SPAN");
-  expect(client.mxcUrlToHttp).toBeCalledTimes(0);
-});
-
-test("should attempt to fetch authenticated media", async () => {
+test("should attempt to fetch authenticated media from the server", async () => {
   const expectedAuthUrl = "http://example.org/media/alice-avatar";
   const expectedObjectURL = "my-object-url";
   const accessToken = "my-access-token";
@@ -153,4 +131,48 @@ test("should attempt to fetch authenticated media", async () => {
   expect(globalThis.fetch).toBeCalledWith(expectedAuthUrl, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
+});
+
+test("should download media through the host when it offers to", async () => {
+  const expectedMXCUrl = "mxc://example.org/alice-avatar";
+  const expectedObjectURL = "my-object-url";
+  const theBlob = new Blob([]);
+
+  // vitest doesn't have a implementation of create/revokeObjectURL, so we need
+  // to delete the property. It's a bit odd, but it works.
+  Reflect.deleteProperty(global.window.URL, "createObjectURL");
+  globalThis.URL.createObjectURL = vi.fn().mockReturnValue(expectedObjectURL);
+  Reflect.deleteProperty(global.window.URL, "revokeObjectURL");
+  globalThis.URL.revokeObjectURL = vi.fn();
+
+  const client = vi.mocked<MatrixClient>({
+    getAccessToken: () => undefined,
+  } as unknown as MatrixClient);
+
+  const downloadMedia = vi.fn().mockResolvedValue(theBlob);
+  const hostBridge: HostBridge = { ...nullHostBridge, downloadMedia };
+  const member = mockMatrixRoomMember(
+    mockRtcMembership("@alice:example.org", "AAAA"),
+    {
+      getMxcAvatarUrl: () => expectedMXCUrl,
+    },
+  );
+  const displayName = "Alice";
+  render(
+    <TestComponent client={client} hostBridge={hostBridge}>
+      <Avatar
+        id={member.userId}
+        name={displayName}
+        size={96}
+        src={member.getMxcAvatarUrl()}
+      />
+    </TestComponent>,
+  );
+
+  // Fetch is asynchronous, so wait for this to resolve.
+  await vi.waitUntil(() =>
+    document.querySelector(`img[src='${expectedObjectURL}']`),
+  );
+
+  expect(downloadMedia).toBeCalledWith(expectedMXCUrl);
 });

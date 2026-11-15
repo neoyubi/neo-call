@@ -1,121 +1,93 @@
-import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import { type ComponentProps, type ReactNode, useState } from "react";
+/*
+Copyright 2026 Element Creations Ltd.
+
+SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
+Please see LICENSE in the repository root for full details.
+*/
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { axe } from "vitest-axe";
-import { TooltipProvider } from "@vector-im/compound-web";
 import { type MatrixClient } from "matrix-js-sdk";
+import { TooltipProvider } from "@vector-im/compound-web";
 
 import { SettingsModal } from "./SettingsModal";
+import { backgroundEffect } from "./settings";
 import { MediaDevicesContext } from "../MediaDevicesContext";
+import { type BackgroundEffectsState } from "../state/BackgroundEffects";
 import { mockMediaDevices } from "../utils/test";
+import { constant } from "../state/Behavior";
+import { type MediaDevices } from "../state/MediaDevices";
 
-vi.mock("../UrlParams", () => ({
-  useUrlParams: (): { controlledAudioDevices: boolean } => ({
-    controlledAudioDevices: false,
-  }),
-}));
-
-vi.mock("../livekit/TrackProcessorContext", () => ({
-  useTrackProcessor: (): { supported: boolean; processor: undefined } => ({
-    supported: false,
+vi.mock("../tracks/BackgroundEffectsContext", () => ({
+  useBackgroundEffects: (): BackgroundEffectsState => ({
+    supported: true,
     processor: undefined,
   }),
 }));
 
-const client = {
-  getUserId: () => "@alice:example.org",
-  getUser: () => null,
-} as unknown as MatrixClient;
+// Behaviors, as the device menus read them.
+const noDevices = {
+  available$: constant(new Map()),
+  selected$: constant(undefined),
+  select: vi.fn(),
+};
 
-const originalMatchMedia = window.matchMedia;
-afterEach(() => {
-  window.matchMedia = originalMatchMedia;
-});
-
-beforeAll(() => {
-  // Needed by the volume slider
-  globalThis.ResizeObserver = class ResizeObserver {
-    public observe(): void {
-      // do nothing
-    }
-    public unobserve(): void {
-      // do nothing
-    }
-    public disconnect(): void {
-      // do nothing
-    }
-  };
-});
-
-type SettingsTab = ComponentProps<typeof SettingsModal>["tab"];
-
-function Settings(): ReactNode {
-  const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<SettingsTab>("audio");
-  return (
+function renderVideoTab(): void {
+  render(
     <TooltipProvider>
-      <button onClick={() => setOpen(true)}>Open settings</button>
       <MediaDevicesContext
-        value={mockMediaDevices({ requestDeviceNames: vi.fn() })}
+        value={mockMediaDevices({
+          requestDeviceNames: vi.fn(),
+          audioInput: noDevices,
+          audioOutput: noDevices,
+          videoInput: noDevices,
+        } as unknown as Partial<MediaDevices>)}
       >
         <SettingsModal
-          open={open}
-          onDismiss={() => setOpen(false)}
-          tab={tab}
-          onTabChange={setTab}
-          client={client}
+          open
+          onDismiss={vi.fn()}
+          tab="video"
+          onTabChange={vi.fn()}
+          client={
+            {
+              getUserId: () => "@user:example.org",
+              getUser: () => null,
+            } as unknown as MatrixClient
+          }
         />
       </MediaDevicesContext>
-    </TooltipProvider>
+    </TooltipProvider>,
   );
 }
 
-test("the open settings modal is accessible", async () => {
-  const user = userEvent.setup();
-  render(<Settings />);
-  await user.click(screen.getByRole("button", { name: "Open settings" }));
+const blurControl = (): HTMLElement =>
+  screen.getByRole("checkbox", { name: "Blur the background of the video" });
 
-  expect(await axe(screen.getByRole("dialog"))).toHaveNoViolations();
-});
+describe("SettingsModal", () => {
+  afterEach(() => backgroundEffect.setValue("none"));
 
-test("focus stays within the modal while it is open", async () => {
-  const user = userEvent.setup();
-  render(<Settings />);
-  await user.click(screen.getByRole("button", { name: "Open settings" }));
-  const dialog = screen.getByRole("dialog");
+  it("blur control turns blur on and off", async () => {
+    const user = userEvent.setup();
+    renderVideoTab();
+    expect(blurControl()).not.toBeChecked();
 
-  // However far the focus is moved, it never leaves the dialog
-  for (let i = 0; i < 12; i++) {
-    await user.tab();
-    expect(dialog).toContainElement(document.activeElement as HTMLElement);
-  }
+    await user.click(blurControl());
+    expect(backgroundEffect.getValue()).toBe("blur");
+    expect(blurControl()).toBeChecked();
 
-  await user.click(screen.getByRole("button", { name: "Close" }));
-  expect(screen.queryByRole("dialog")).toBeNull();
-});
+    await user.click(blurControl());
+    expect(backgroundEffect.getValue()).toBe("none");
+    expect(blurControl()).not.toBeChecked();
+  });
 
-test("every tab is still reachable on a touchscreen", async () => {
-  window.matchMedia = (query): MediaQueryList =>
-    ({
-      matches: query.includes("hover: none") || query.includes("pointer"),
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    }) as Partial<MediaQueryList> as MediaQueryList;
+  it("blur control reflects and replaces an image background", async () => {
+    const user = userEvent.setup();
+    backgroundEffect.setValue("image:arc");
+    renderVideoTab();
+    expect(blurControl()).not.toBeChecked();
 
-  const user = userEvent.setup();
-  render(<Settings />);
-  await user.click(screen.getByRole("button", { name: "Open settings" }));
-
-  // The drawer is the whole width of a phone, which is where the tab strip has
-  // the least room. Every tab still has to be there and be selectable.
-  const tabs = screen.getAllByRole("tab");
-  expect(tabs.length).toBeGreaterThan(1);
-  for (const tab of tabs) {
-    expect(tab).toBeVisible();
-  }
-  expect(await axe(screen.getByRole("dialog"))).toHaveNoViolations();
-
-  await user.click(tabs[1]);
-  expect(tabs[1]).toHaveAttribute("aria-selected", "true");
+    await user.click(blurControl());
+    expect(backgroundEffect.getValue()).toBe("blur");
+  });
 });

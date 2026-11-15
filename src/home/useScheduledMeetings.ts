@@ -1,4 +1,9 @@
-import { type MatrixClient, type Room, RoomEvent } from "matrix-js-sdk";
+import {
+  type MatrixClient,
+  type Room,
+  RoomEvent,
+  RoomStateEvent,
+} from "matrix-js-sdk";
 import { useState, useEffect } from "react";
 import { logger } from "matrix-js-sdk/lib/logger";
 
@@ -121,10 +126,10 @@ export function useScheduledMeetings(client: MatrixClient): ScheduledMeetings {
     updateMeetings();
 
     client.on(RoomEvent.MyMembership, updateMeetings);
-    client.on(RoomEvent.CurrentStateUpdated, updateMeetings);
+    client.on(RoomStateEvent.Events, updateMeetings);
     return (): void => {
       client.off(RoomEvent.MyMembership, updateMeetings);
-      client.off(RoomEvent.CurrentStateUpdated, updateMeetings);
+      client.off(RoomStateEvent.Events, updateMeetings);
     };
   }, [client]);
 

@@ -20,32 +20,41 @@ import {
   CollapseIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  VolumeOffIcon,
+  VolumeOnIcon,
+  VolumeOffSolidIcon,
+  VolumeOnSolidIcon,
 } from "@vector-im/compound-design-tokens/assets/web/icons";
 import { animated } from "@react-spring/web";
-import { type Observable, map } from "rxjs";
-import { useObservableRef } from "observable-hooks";
+import { BehaviorSubject, type Observable, map } from "rxjs";
 import { useTranslation } from "react-i18next";
 import classNames from "classnames";
-import { type TrackReferenceOrPlaceholder } from "@livekit/components-core";
+import { type VideoMediaTrack } from "@element-hq/matrixrtc-sdk";
+import { Menu, MenuItem, Text } from "@vector-im/compound-web";
 
 import FullScreenMaximiseIcon from "../icons/FullScreenMaximise.svg?react";
 import FullScreenMinimiseIcon from "../icons/FullScreenMinimise.svg?react";
 import { MediaView } from "./MediaView";
 import styles from "./SpotlightTile.module.css";
-import {
-  type EncryptionStatus,
-  LocalUserMediaViewModel,
-  type MediaViewModel,
-  ScreenShareViewModel,
-  type UserMediaViewModel,
-  type RemoteUserMediaViewModel,
-} from "../state/MediaViewModel";
 import { useInitial } from "../useInitial";
 import { useMergedRefs } from "../useMergedRefs";
 import { useReactiveState } from "../useReactiveState";
 import { useLatest } from "../useLatest";
 import { type SpotlightTileViewModel } from "../state/TileViewModel";
 import { useBehavior } from "../useBehavior";
+import { type MemberMediaViewModel } from "../state/media/MemberMediaViewModel";
+import { type LocalUserMediaViewModel } from "../state/media/LocalUserMediaViewModel";
+import { type RemoteUserMediaViewModel } from "../state/media/RemoteUserMediaViewModel";
+import { type UserMediaViewModel } from "../state/media/UserMediaViewModel";
+import { type ScreenShareViewModel } from "../state/media/ScreenShareViewModel";
+import { type RemoteScreenShareViewModel } from "../state/media/RemoteScreenShareViewModel";
+import { type MediaViewModel } from "../state/media/MediaViewModel";
+import { Slider } from "../Slider";
+import { platform } from "../Platform";
+import { type RingingMediaViewModel } from "../state/media/RingingMediaViewModel";
+import { RingingStatus } from "./RingingStatus";
+import { useRootElement } from "../RootElementContext";
+import { type Transport } from "matrix-js-sdk/lib/matrixrtc";
 
 interface SpotlightItemBaseProps {
   ref?: Ref<HTMLDivElement>;
@@ -53,20 +62,25 @@ interface SpotlightItemBaseProps {
   "data-id": string;
   targetWidth: number;
   targetHeight: number;
-  video: TrackReferenceOrPlaceholder | undefined;
-  videoEnabled: boolean;
   userId: string;
-  unencryptedWarning: boolean;
-  encryptionStatus: EncryptionStatus;
-  focusUrl: string | undefined;
   displayName: string;
   mxcAvatarUrl: string | undefined;
+  showNameTags: boolean;
+  background: "solid" | "transparent";
   focusable: boolean;
   "aria-hidden"?: boolean;
+  setVideoAspectRatio?: (ratio: number) => void;
 }
 
-interface SpotlightUserMediaItemBaseProps extends SpotlightItemBaseProps {
-  videoFit: "contain" | "cover";
+interface SpotlightMemberMediaItemBaseProps extends SpotlightItemBaseProps {
+  video: VideoMediaTrack | undefined;
+  unencryptedWarning: boolean;
+  transport: Transport | undefined;
+}
+
+interface SpotlightUserMediaItemBaseProps extends SpotlightMemberMediaItemBaseProps {
+  videoEnabled: boolean;
+  soundWaves: boolean | undefined;
 }
 
 interface SpotlightLocalUserMediaItemProps extends SpotlightUserMediaItemBaseProps {
@@ -97,23 +111,30 @@ const SpotlightRemoteUserMediaItem: FC<SpotlightRemoteUserMediaItemProps> = ({
   );
 };
 
-interface SpotlightUserMediaItemProps extends SpotlightItemBaseProps {
+interface SpotlightUserMediaItemProps extends SpotlightMemberMediaItemBaseProps {
   vm: UserMediaViewModel;
 }
 
 const SpotlightUserMediaItem: FC<SpotlightUserMediaItemProps> = ({
   vm,
+  targetWidth,
+  targetHeight,
   ...props
 }) => {
-  const cropVideo = useBehavior(vm.cropVideo$);
+  const videoEnabled = useBehavior(vm.videoEnabled$);
+  const speaking = useBehavior(vm.speaking$);
 
   const baseProps: SpotlightUserMediaItemBaseProps &
     RefAttributes<HTMLDivElement> = {
-    videoFit: cropVideo ? "cover" : "contain",
+    setVideoAspectRatio: vm.setVideoAspectRatio,
+    videoEnabled,
+    soundWaves: props.background === "transparent" ? speaking : undefined,
+    targetWidth,
+    targetHeight,
     ...props,
   };
 
-  return vm instanceof LocalUserMediaViewModel ? (
+  return vm.local ? (
     <SpotlightLocalUserMediaItem vm={vm} {...baseProps} />
   ) : (
     <SpotlightRemoteUserMediaItem vm={vm} {...baseProps} />
@@ -122,17 +143,110 @@ const SpotlightUserMediaItem: FC<SpotlightUserMediaItemProps> = ({
 
 SpotlightUserMediaItem.displayName = "SpotlightUserMediaItem";
 
+interface SpotlightScreenShareItemProps extends SpotlightMemberMediaItemBaseProps {
+  vm: ScreenShareViewModel;
+  videoEnabled: boolean;
+}
+
+const SpotlightScreenShareItem: FC<SpotlightScreenShareItemProps> = ({
+  vm,
+  ...props
+}) => {
+  return <MediaView videoFit="contain" mirror={false} {...props} />;
+};
+
+interface SpotlightRemoteScreenShareItemProps extends SpotlightMemberMediaItemBaseProps {
+  vm: RemoteScreenShareViewModel;
+}
+
+const SpotlightRemoteScreenShareItem: FC<
+  SpotlightRemoteScreenShareItemProps
+> = ({ vm, ...props }) => {
+  const videoEnabled = useBehavior(vm.videoEnabled$);
+  return (
+    <SpotlightScreenShareItem vm={vm} videoEnabled={videoEnabled} {...props} />
+  );
+};
+
+interface SpotlightMemberMediaItemProps extends SpotlightItemBaseProps {
+  vm: MemberMediaViewModel;
+}
+
+const SpotlightMemberMediaItem: FC<SpotlightMemberMediaItemProps> = ({
+  vm,
+  ...props
+}) => {
+  const video = useBehavior(vm.video$);
+  const unencryptedWarning = useBehavior(vm.unencryptedWarning$);
+  const transport = useBehavior(vm.transport$);
+
+  const baseProps: SpotlightMemberMediaItemBaseProps &
+    RefAttributes<HTMLDivElement> = {
+    video: video ?? undefined,
+    unencryptedWarning,
+    transport,
+    ...props,
+  };
+
+  if (vm.type === "user")
+    return <SpotlightUserMediaItem vm={vm} {...baseProps} />;
+  return vm.local ? (
+    <SpotlightScreenShareItem vm={vm} videoEnabled {...baseProps} />
+  ) : (
+    <SpotlightRemoteScreenShareItem vm={vm} {...baseProps} />
+  );
+};
+
+interface SpotlightRingingMediaItemProps extends SpotlightItemBaseProps {
+  vm: RingingMediaViewModel;
+  showStatus: boolean;
+}
+
+const SpotlightRingingMediaItem: FC<SpotlightRingingMediaItemProps> = ({
+  vm,
+  showStatus,
+  ...props
+}) => {
+  return (
+    <MediaView
+      video={undefined}
+      unencryptedWarning={false}
+      status={
+        showStatus && (
+          <Text as="span" size="md" weight="medium">
+            <RingingStatus vm={vm} />
+          </Text>
+        )
+      }
+      avatarStyle="translucent"
+      videoEnabled={false}
+      mirror={false}
+      {...props}
+    />
+  );
+};
+
 interface SpotlightItemProps {
   ref?: Ref<HTMLDivElement>;
   vm: MediaViewModel;
+  /**
+   * The width this tile will have once its animations have settled.
+   */
   targetWidth: number;
+  /**
+   * The height this tile will have once its animations have settled.
+   */
   targetHeight: number;
+  showNameTags: boolean;
+  showRingingStatus: boolean;
+  background: "solid" | "transparent";
   focusable: boolean;
   intersectionObserver$: Observable<IntersectionObserver>;
   /**
    * Whether this item should act as a scroll snapping point.
    */
   snap: boolean;
+  className?: string;
   "aria-hidden"?: boolean;
 }
 
@@ -141,20 +255,20 @@ const SpotlightItem: FC<SpotlightItemProps> = ({
   vm,
   targetWidth,
   targetHeight,
+  showNameTags,
+  showRingingStatus,
+  background,
   focusable,
   intersectionObserver$,
   snap,
+  className,
   "aria-hidden": ariaHidden,
 }) => {
   const ourRef = useRef<HTMLDivElement | null>(null);
+
   const ref = useMergedRefs(ourRef, theirRef);
-  const focusUrl = useBehavior(vm.focusUrl$);
   const displayName = useBehavior(vm.displayName$);
   const mxcAvatarUrl = useBehavior(vm.mxcAvatarUrl$);
-  const video = useBehavior(vm.video$);
-  const videoEnabled = useBehavior(vm.videoEnabled$);
-  const unencryptedWarning = useBehavior(vm.unencryptedWarning$);
-  const encryptionStatus = useBehavior(vm.encryptionStatus$);
 
   // Hook this item up to the intersection observer
   useEffect(() => {
@@ -174,29 +288,97 @@ const SpotlightItem: FC<SpotlightItemProps> = ({
   const baseProps: SpotlightItemBaseProps & RefAttributes<HTMLDivElement> = {
     ref,
     "data-id": vm.id,
-    className: classNames(styles.item, { [styles.snap]: snap }),
+    className: classNames(className, styles.item, { [styles.snap]: snap }),
     targetWidth,
     targetHeight,
-    video: video ?? undefined,
-    videoEnabled,
     userId: vm.userId,
-    unencryptedWarning,
-    focusUrl,
     displayName,
     mxcAvatarUrl,
+    showNameTags,
+    background,
     focusable,
-    encryptionStatus,
     "aria-hidden": ariaHidden,
   };
 
-  return vm instanceof ScreenShareViewModel ? (
-    <MediaView videoFit="contain" mirror={false} {...baseProps} />
+  return vm.type === "ringing" ? (
+    <SpotlightRingingMediaItem
+      vm={vm}
+      showStatus={showRingingStatus}
+      {...baseProps}
+    />
   ) : (
-    <SpotlightUserMediaItem vm={vm} {...baseProps} />
+    <SpotlightMemberMediaItem vm={vm} {...baseProps} />
   );
 };
 
 SpotlightItem.displayName = "SpotlightItem";
+
+interface ScreenShareVolumeButtonProps {
+  vm: RemoteScreenShareViewModel;
+}
+
+const ScreenShareVolumeButton: FC<ScreenShareVolumeButtonProps> = ({ vm }) => {
+  const { t } = useTranslation();
+
+  const audioEnabled = useBehavior(vm.audioEnabled$);
+  const playbackMuted = useBehavior(vm.playbackMuted$);
+  const playbackVolume = useBehavior(vm.playbackVolume$);
+
+  const VolumeIcon = playbackMuted ? VolumeOffIcon : VolumeOnIcon;
+  const VolumeSolidIcon = playbackMuted
+    ? VolumeOffSolidIcon
+    : VolumeOnSolidIcon;
+
+  const [volumeMenuOpen, setVolumeMenuOpen] = useState(false);
+  const onMuteButtonClick = useCallback(() => vm.togglePlaybackMuted(), [vm]);
+  const onVolumeChange = useCallback(
+    (v: number) => vm.adjustPlaybackVolume(v),
+    [vm],
+  );
+  const onVolumeCommit = useCallback(() => vm.commitPlaybackVolume(), [vm]);
+
+  return (
+    audioEnabled && (
+      <Menu
+        open={volumeMenuOpen}
+        onOpenChange={setVolumeMenuOpen}
+        title={t("video_tile.screen_share_volume")}
+        side="top"
+        align="end"
+        trigger={
+          <button
+            className={styles.expand}
+            aria-label={t("video_tile.screen_share_volume")}
+          >
+            <VolumeSolidIcon aria-hidden width={20} height={20} />
+          </button>
+        }
+      >
+        <MenuItem
+          as="div"
+          className={styles.volumeMenuItem}
+          onSelect={null}
+          label={null}
+          hideChevron={true}
+        >
+          <button className={styles.menuMuteButton} onClick={onMuteButtonClick}>
+            <VolumeIcon aria-hidden width={24} height={24} />
+          </button>
+          <Slider
+            className={styles.volumeSlider}
+            label={t("video_tile.volume")}
+            value={playbackVolume}
+            min={0}
+            max={1}
+            step={0.01}
+            onValueChange={onVolumeChange}
+            onValueCommit={onVolumeCommit}
+          />
+        </MenuItem>
+      </Menu>
+    )
+  );
+};
 
 interface Props {
   ref?: Ref<HTMLDivElement>;
@@ -206,8 +388,14 @@ interface Props {
   targetWidth: number;
   targetHeight: number;
   showIndicators: boolean;
+  showNameTags: boolean;
+  showRingingStatus: boolean;
   focusable: boolean;
   className?: string;
+  /**
+   * CSS class of the individual spotlight items.
+   */
+  itemClassName?: string;
   style?: ComponentProps<typeof animated.div>["style"];
 }
 
@@ -219,41 +407,51 @@ export const SpotlightTile: FC<Props> = ({
   targetWidth,
   targetHeight,
   showIndicators,
+  showNameTags,
+  showRingingStatus,
   focusable = true,
   className,
+  itemClassName,
   style,
 }) => {
   const { t } = useTranslation();
-  const [ourRef, root$] = useObservableRef<HTMLDivElement | null>(null);
+  const rootElement = useRootElement();
+  const root$ = useInitial(
+    () => new BehaviorSubject<HTMLDivElement | null>(null),
+  );
+  const ourRef = useCallback(
+    (root: HTMLDivElement | null) => root$.next(root),
+    [root$],
+  );
   const ref = useMergedRefs(ourRef, theirRef);
   const maximised = useBehavior(vm.maximised$);
+  const background = useBehavior(vm.background$);
   const media = useBehavior(vm.media$);
   const [visibleId, setVisibleId] = useState<string | undefined>(media[0]?.id);
   const latestMedia = useLatest(media);
   const latestVisibleId = useLatest(visibleId);
   const visibleIndex = media.findIndex((vm) => vm.id === visibleId);
+  const visibleMedia = media.at(visibleIndex);
   const canGoBack = visibleIndex > 0;
   const canGoToNext = visibleIndex !== -1 && visibleIndex < media.length - 1;
 
   const isFullscreen = useCallback((): boolean => {
-    const rootElement = document.body;
     if (rootElement && document.fullscreenElement) return true;
     return false;
-  }, []);
+  }, [rootElement]);
 
   const FullScreenIcon = isFullscreen()
     ? FullScreenMinimiseIcon
     : FullScreenMaximiseIcon;
 
   const onToggleFullscreen = useCallback(() => {
-    const rootElement = document.body;
     if (!rootElement) return;
     if (isFullscreen()) {
       void document?.exitFullscreen();
     } else {
       void rootElement.requestFullscreen();
     }
-  }, [isFullscreen]);
+  }, [isFullscreen, rootElement]);
 
   // To keep track of which item is visible, we need an intersection observer
   // hooked up to the root element and the items. Because the items will run
@@ -306,9 +504,8 @@ export const SpotlightTile: FC<Props> = ({
   return (
     <animated.div
       ref={ref}
-      className={classNames(className, styles.tile, {
-        [styles.maximised]: maximised,
-      })}
+      className={classNames(className, styles.tile)}
+      data-maximised={maximised}
       style={style}
     >
       {canGoBack && (
@@ -328,6 +525,9 @@ export const SpotlightTile: FC<Props> = ({
             vm={vm}
             targetWidth={targetWidth}
             targetHeight={targetHeight}
+            showRingingStatus={showRingingStatus}
+            showNameTags={showNameTags}
+            background={background}
             focusable={focusable}
             intersectionObserver$={intersectionObserver$}
             // This is how we get the container to scroll to the right media
@@ -335,20 +535,26 @@ export const SpotlightTile: FC<Props> = ({
             // remove all scroll snap points except for just the one media
             // that we want to bring into view
             snap={scrollToId === null || scrollToId === vm.id}
+            className={itemClassName}
             aria-hidden={(scrollToId ?? visibleId) !== vm.id}
           />
         ))}
       </div>
-      <div className={styles.bottomRightButtons}>
-        <button
-          className={classNames(styles.expand)}
-          aria-label={"maximise"}
-          onClick={onToggleFullscreen}
-          tabIndex={focusable ? undefined : -1}
-        >
-          <FullScreenIcon aria-hidden width={20} height={20} />
-        </button>
 
+      <div className={styles.bottomRightButtons}>
+        {visibleMedia?.type === "screen share" && !visibleMedia.local && (
+          <ScreenShareVolumeButton vm={visibleMedia} />
+        )}
+        {platform === "desktop" && (
+          <button
+            className={classNames(styles.expand)}
+            aria-label={"maximise"}
+            onClick={onToggleFullscreen}
+            tabIndex={focusable ? undefined : -1}
+          >
+            <FullScreenIcon aria-hidden width={20} height={20} />
+          </button>
+        )}
         {onToggleExpanded && (
           <button
             className={classNames(styles.expand)}
@@ -381,6 +587,7 @@ export const SpotlightTile: FC<Props> = ({
         >
           {media.map((vm) => (
             <div
+              data-testid="screenshare-indicator"
               key={vm.id}
               className={styles.item}
               data-visible={vm.id === visibleId}

@@ -480,7 +480,7 @@ export const ScheduleMeetingForm: FC<Props> = ({
   if (result !== undefined) {
     const when = new Date(result.start);
     return (
-      <div className={styles.wrapper} data-modal-fit="content">
+      <div className={styles.wrapper}>
         <div
           className={
             onDone ? `${styles.container} ${styles.bare}` : styles.container
@@ -489,7 +489,7 @@ export const ScheduleMeetingForm: FC<Props> = ({
           <div className={styles.success} role="status">
             <Heading
               as="h3"
-              size="sm"
+              size="md"
               weight="semibold"
               className={styles.successTitle}
               tabIndex={-1}
@@ -498,10 +498,10 @@ export const ScheduleMeetingForm: FC<Props> = ({
               <CheckCircleSolidIcon className={styles.successIcon} />
               {t("schedule_meeting.success_title")}
             </Heading>
-            <Text size="sm">
+            <Text size="md">
               {t("schedule_meeting.success_detail", { email: result.email })}
             </Text>
-            <Text size="sm" weight="medium">
+            <Text size="md" weight="medium">
               {t("schedule_meeting.success_when", {
                 date: when.toLocaleDateString(i18n.language),
                 time: when.toLocaleTimeString(i18n.language, {
@@ -523,7 +523,7 @@ export const ScheduleMeetingForm: FC<Props> = ({
                 </span>
                 <div className={styles.linkRow}>
                   <Text
-                    size="sm"
+                    size="md"
                     className={styles.link}
                     title={result.meetLink}
                   >
@@ -531,7 +531,7 @@ export const ScheduleMeetingForm: FC<Props> = ({
                   </Text>
                   <Button
                     kind="secondary"
-                    size="sm"
+                    size="md"
                     onClick={onCopyLink}
                     Icon={copied ? CheckIcon : undefined}
                   >
@@ -563,13 +563,13 @@ export const ScheduleMeetingForm: FC<Props> = ({
   }
 
   return (
-    <div className={styles.wrapper} data-modal-fit="content">
+    <div className={styles.wrapper}>
       <div
         className={
           onDone ? `${styles.container} ${styles.bare}` : styles.container
         }
       >
-        <Heading size="sm" weight="semibold" className={styles.title}>
+        <Heading size="md" weight="semibold" className={styles.title}>
           {t("schedule_meeting.title")}
         </Heading>
         {/* The fields keep `required` for assistive technology, but the browser

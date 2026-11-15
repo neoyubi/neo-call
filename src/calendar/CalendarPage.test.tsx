@@ -10,14 +10,17 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { TooltipProvider } from "@vector-im/compound-web";
 import { type FC, type ReactElement } from "react";
-import i18n from "i18next";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ClientContextProvider, type ValidClientState } from "../ClientContext";
 import { calendarView } from "../settings/settings";
 import { formatDay } from "./dates";
-import { mockConfig } from "../utils/test";
+import { mockConfig, mockMediaDevices } from "../utils/test";
+import { MediaDevicesContext } from "../MediaDevicesContext";
 import { CalendarPage } from "./CalendarPage";
+import weekStyles from "./WeekView.module.css";
+import monthStyles from "./MonthView.module.css";
+import { i18n } from "../utils/i18n";
 
 process.env.TZ = "Europe/Berlin";
 
@@ -67,6 +70,8 @@ function fakeClient(canSchedule = false): MatrixClient {
         ? ({ getMyMembership: () => KnownMembership.Join } as unknown as Room)
         : null,
     getUserId: () => "@me:example.org",
+    getUser: () => null,
+    getUserIdLocalpart: () => "me",
     getAccessToken: () => "syt_token",
     on: () => {},
     off: () => {},
@@ -102,18 +107,20 @@ function renderCalendar(
     <MemoryRouter initialEntries={[entry]}>
       <TooltipProvider>
         <ClientContextProvider value={clientState}>
-          <Routes>
-            <Route
-              path="/calendar"
-              element={
-                <>
-                  <CalendarPage />
-                  <LocationProbe />
-                </>
-              }
-            />
-            <Route path="*" element={<p>Room page</p>} />
-          </Routes>
+          <MediaDevicesContext value={mockMediaDevices({})}>
+            <Routes>
+              <Route
+                path="/calendar"
+                element={
+                  <>
+                    <CalendarPage />
+                    <LocationProbe />
+                  </>
+                }
+              />
+              <Route path="*" element={<p>Room page</p>} />
+            </Routes>
+          </MediaDevicesContext>
         </ClientContextProvider>
       </TooltipProvider>
     </MemoryRouter>,
@@ -121,11 +128,17 @@ function renderCalendar(
 }
 
 beforeEach(() => {
+  // The fixture meeting is on 20 August 2026, and meetings that have already
+  // started drop out of the list; read the clock as the day before it, so the
+  // tests do not depend on the day they run.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 7, 19, 9, 0));
   mockConfig({ calendar: { first_day_of_week: "monday" } });
   calendarView.setValue(null);
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   calendarView.setValue(null);
@@ -145,7 +158,9 @@ describe("CalendarPage", () => {
       "/calendar?view=day&date=2026-08-20",
       true,
     );
-    const column = container.querySelector<HTMLElement>(".column")!;
+    const column = container.querySelector<HTMLElement>(
+      `.${weekStyles.column}`,
+    )!;
     // One pixel per minute, so a clientY reads as minutes from midnight.
     column.getBoundingClientRect = (): DOMRect =>
       ({ top: 0, height: 1440 }) as DOMRect;
@@ -166,7 +181,9 @@ describe("CalendarPage", () => {
 
     act(() => {
       fireEvent(
-        container.querySelectorAll<HTMLElement>(".slotButton")[10],
+        container.querySelectorAll<HTMLElement>(
+          `.${weekStyles.slotButton}`,
+        )[10],
         press("pointerdown", 630),
       );
       fireEvent(column, press("pointermove", 735));
@@ -191,14 +208,14 @@ describe("CalendarPage", () => {
 
   it("opens on the week view when nothing has been chosen", () => {
     const { container } = renderCalendar();
-    expect(container.querySelector(".week")).toBeInTheDocument();
+    expect(container.querySelector(`.${weekStyles.week}`)).toBeInTheDocument();
   });
 
   it("opens on the view named in the link", () => {
     const { container } = renderCalendar(
       "/calendar?view=month&date=2026-08-20",
     );
-    expect(container.querySelector(".grid")).toBeInTheDocument();
+    expect(container.querySelector(`.${monthStyles.grid}`)).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
       "August 2026",
     );
@@ -206,13 +223,18 @@ describe("CalendarPage", () => {
 
   it("ignores a view the calendar does not have", () => {
     const { container } = renderCalendar("/calendar?view=decade");
-    expect(container.querySelector(".week")).toBeInTheDocument();
+    expect(container.querySelector(`.${weekStyles.week}`)).toBeInTheDocument();
   });
 
   it("opens on the view chosen last time", () => {
     calendarView.setValue("agenda");
-    const { container } = renderCalendar();
-    expect(container.querySelector(".agenda")).toBeInTheDocument();
+    renderCalendar();
+    // Asked of the view switcher rather than the list, which is replaced by a
+    // notice when nothing is coming up
+    expect(screen.getByRole("button", { name: "Agenda" })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
   });
 
   it("says when a period holds nothing rather than showing an empty grid", () => {

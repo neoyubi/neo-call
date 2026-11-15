@@ -14,10 +14,10 @@ import {
 } from "matrix-js-sdk";
 import { logger } from "matrix-js-sdk/lib/logger";
 
-import { initClient } from "../utils/matrix";
+import { initClient } from "../utils/initClient";
 import { type Session } from "../ClientContext";
 import { Config } from "../config/Config";
-import { widget } from "../widget";
+import { useUrlParams } from "../UrlParams";
 
 export const useInteractiveRegistration = (
   oldClient?: MatrixClient,
@@ -33,6 +33,7 @@ export const useInteractiveRegistration = (
     passwordlessUser: boolean,
   ) => Promise<[MatrixClient, Session]>;
 } => {
+  const { isWidget } = useUrlParams();
   const [privacyPolicyUrl, setPrivacyPolicyUrl] = useState<string | undefined>(
     undefined,
   );
@@ -48,7 +49,7 @@ export const useInteractiveRegistration = (
   }
 
   useEffect(() => {
-    if (widget || !enabled) return;
+    if (isWidget || !enabled) return;
     // An empty registerRequest is used to get the privacy policy and recaptcha key.
     authClient.current!.registerRequest({}).catch((error) => {
       setPrivacyPolicyUrl(
@@ -56,7 +57,7 @@ export const useInteractiveRegistration = (
       );
       setRecaptchaKey(error.data?.params["m.login.recaptcha"]?.public_key);
     });
-  }, [enabled]);
+  }, [isWidget, enabled]);
 
   const register = useCallback(
     async (

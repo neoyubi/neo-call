@@ -95,7 +95,9 @@ export const RotatingCodeBadge: FC<Props> = ({
   const dashOffset = RING_CIRCUMFERENCE * (1 - progress);
 
   return (
-    <div className={classNames(styles.badge, { [styles.disabled]: !canReveal })}>
+    <div
+      className={classNames(styles.badge, { [styles.disabled]: !canReveal })}
+    >
       <button
         className={styles.codeButton}
         onClick={onCodeClick}

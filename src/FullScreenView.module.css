@@ -15,7 +15,7 @@ Please see LICENSE in the repository root for full details.
 
 .header {
   padding-block: 76px;
-  padding-inline: var(--inline-content-inset);
+  padding-inline: var(--content-inset-left) var(--content-inset-right);
 }
 
 .container {
@@ -32,7 +32,7 @@ Please see LICENSE in the repository root for full details.
   justify-content: center;
   align-items: center;
   max-width: 660px;
-  padding-inline: var(--inline-content-inset);
+  padding-inline: var(--content-inset-left) var(--content-inset-right);
 }
 
 .content > * {

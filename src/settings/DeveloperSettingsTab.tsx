@@ -8,9 +8,9 @@ Please see LICENSE in the repository root for full details.
 import {
   type ChangeEvent,
   type FC,
+  type ReactNode,
   useCallback,
   useEffect,
-  useMemo,
   useId,
   useState,
 } from "react";
@@ -20,19 +20,23 @@ import {
   type MatrixClient,
 } from "matrix-js-sdk";
 import { logger } from "matrix-js-sdk/lib/logger";
+import { type UnstableLivekitTransport } from "matrix-js-sdk/lib/matrixrtc";
 import {
   EditInPlace,
+  ErrorMessage,
   Root as Form,
   Heading,
   HelpMessage,
   InlineField,
   Label,
   RadioControl,
+  Separator,
 } from "@vector-im/compound-web";
-import { type Room as LivekitRoom } from "livekit-client";
 
 import { FieldRow, InputField } from "../input/Input";
+import { Config } from "../config/Config";
 import {
+  type Setting,
   useSetting,
   duplicateTiles as duplicateTilesSetting,
   debugTileLayout as debugTileLayoutSetting,
@@ -40,30 +44,92 @@ import {
   muteAllAudio as muteAllAudioSetting,
   alwaysShowIphoneEarpiece as alwaysShowIphoneEarpieceSetting,
   matrixRTCMode as matrixRTCModeSetting,
-  customLivekitUrl as customLivekitUrlSetting,
-  MatrixRTCMode,
+  customTransport as customTransportSetting,
+  advancedScreenShare as advancedScreenShareSetting,
+  screenShareResolution as screenShareResolutionSetting,
+  screenShareFramerate as screenShareFramerateSetting,
+  screenShareBitrate as screenShareBitrateSetting,
+  screenShareCodec as screenShareCodecSetting,
+  advancedCamera as advancedCameraSetting,
+  cameraResolution as cameraResolutionSetting,
+  cameraFramerate as cameraFramerateSetting,
+  cameraBitrate as cameraBitrateSetting,
+  cameraCodec as cameraCodecSetting,
+  echoCancellationSetting,
+  noiseSuppressionSetting,
+  autoGainControlSetting,
+  type VideoCodec,
+  enableExtendedLivekitLogs as enableExtendedLivekitLogsSetting,
 } from "./settings";
+import { MatrixRTCMode } from "../config/ConfigOptions";
 import styles from "./DeveloperSettingsTab.module.css";
+import settingsStyles from "./SettingsModal.module.css";
+import { Slider } from "../Slider";
 import { useUrlParams } from "../UrlParams";
 import { productName } from "../branding";
+import {
+  authenticateWithTransport,
+  type TransportMetadata,
+} from "@element-hq/matrixrtc-sdk";
+import { useBehavior } from "../useBehavior";
+import { type ViewModel } from "../state/ViewModel.ts";
+
+/**
+ * The state of MatrixRTC's media key rotation.
+ */
+/** One connected transport, as the panel shows it. */
+export interface TransportInfo {
+  transport: TransportMetadata;
+  /** Whether this is the transport the local member publishes on. */
+  local: boolean;
+}
+
+export interface KeyRotationInfo {
+  /** Whether the call is large enough that MatrixRTC has stopped rotating the media key. */
+  suppressed: boolean;
+  participantCount: number;
+}
+
+/**
+ * The Snapshot combines all fields the developer settings tab needs from the
+ * surrounding call. Everything else in this tab is read from the settings store
+ * or the environment directly.
+ */
+export interface DeveloperSettingsSnapshot {
+  /** The media key rotation state, or `null` when we are not in a call. */
+  keyRotation: KeyRotationInfo | null;
+}
+
+/**
+ * Shows whether the call is large enough that MatrixRTC has stopped rotating the media key.
+ */
+const KeyRotationStatus: FC<{ info: KeyRotationInfo }> = ({ info }) => (
+  <p>
+    Media key rotation:{" "}
+    {info.suppressed
+      ? `suppressed, participant limit reached (${info.participantCount} participants)`
+      : `active (${info.participantCount} participants)`}
+  </p>
+);
 
 interface Props {
   client: MatrixClient;
-  livekitRooms?: {
-    room: LivekitRoom;
-    url: string;
-    isLocal?: boolean;
-    livekitAlias?: string;
-  }[];
+  roomId?: string;
+  /** The transports the client is connected to, while in a call. */
+  transports?: TransportInfo[];
   env: ImportMetaEnv;
+  vm: ViewModel<DeveloperSettingsSnapshot>;
 }
 
 export const DeveloperSettingsTab: FC<Props> = ({
   client,
-  livekitRooms,
+  transports,
+  roomId,
   env,
+  vm,
 }) => {
   const { t } = useTranslation();
+  const keyRotation = useBehavior(vm.keyRotation$);
   const [duplicateTiles, setDuplicateTiles] = useSetting(duplicateTilesSetting);
   const [debugTileLayout, setDebugTileLayout] = useSetting(
     debugTileLayoutSetting,
@@ -89,6 +155,11 @@ export const DeveloperSettingsTab: FC<Props> = ({
     },
     [setMatrixRTCMode],
   );
+  const configMatrixRTCMode = Config.get().matrix_rtc_mode as
+    | MatrixRTCMode
+    | undefined;
+  const matrixRTCModeForced = configMatrixRTCMode !== undefined;
+  const effectiveMatrixRTCMode = configMatrixRTCMode ?? matrixRTCMode;
 
   const [showConnectionStats, setShowConnectionStats] = useSetting(
     showConnectionStatsSetting,
@@ -98,29 +169,205 @@ export const DeveloperSettingsTab: FC<Props> = ({
     alwaysShowIphoneEarpieceSetting,
   );
 
-  const [customLivekitUrl, setCustomLivekitUrl] = useSetting(
-    customLivekitUrlSetting,
+  const [enableExtendedLivekitLogs, setEnableExtendedLivekitLogs] = useSetting(
+    enableExtendedLivekitLogsSetting,
   );
-  const [customLivekitUrlTextBuffer, setCustomLivekitUrlTextBuffer] =
-    useState(customLivekitUrl);
+
+  const [customTransportUpdateError, setCustomTransportUpdateError] = useState<
+    string | null
+  >(null);
+  const [customTransport, setCustomTransport] = useSetting(
+    customTransportSetting,
+  );
+  const [customTransportTextBuffer, setCustomTransportTextBuffer] = useState(
+    () => transportText(customTransport),
+  );
   useEffect(() => {
-    setCustomLivekitUrlTextBuffer(customLivekitUrl);
-  }, [customLivekitUrl]);
+    setCustomTransportTextBuffer(transportText(customTransport));
+  }, [customTransport]);
 
   const [muteAllAudio, setMuteAllAudio] = useSetting(muteAllAudioSetting);
 
   const urlParams = useUrlParams();
 
-  const localSfuUrl = useMemo((): URL | null => {
-    const localRoom = livekitRooms?.find((r) => r.isLocal)?.room;
-    if (localRoom?.engine.client.ws?.url) {
-      // strip the URL params
-      const url = new URL(localRoom.engine.client.ws.url);
-      url.search = "";
-      return url;
-    }
-    return null;
-  }, [livekitRooms]);
+  const MediaQualitySettings: React.FC<{
+    id: string;
+    header: string;
+    toggleLabel: string;
+    description: string;
+    toggleSetting: Setting<boolean>;
+    resolutionSetting: Setting<string>;
+    framerateSetting: Setting<number>;
+    bitrateSetting: Setting<number>;
+    codecSetting: Setting<VideoCodec>;
+    resolutionOptions: { value: string; label: string }[];
+    bitrateRange: { min: number; max: number; step: number };
+  }> = ({
+    id,
+    header,
+    toggleLabel,
+    description,
+    toggleSetting,
+    resolutionSetting,
+    framerateSetting,
+    bitrateSetting,
+    codecSetting,
+    resolutionOptions,
+    bitrateRange,
+  }): ReactNode => {
+    const [advancedEnabled, setAdvancedEnabled] = useSetting(toggleSetting);
+    const [resolution, setResolution] = useSetting(resolutionSetting);
+    const [framerate, setFramerate] = useSetting(framerateSetting);
+    const [framerateRaw, setFramerateRaw] = useState(framerate);
+    const [bitrate, setBitrate] = useSetting(bitrateSetting);
+    const [bitrateRaw, setBitrateRaw] = useState(bitrate);
+    const [codec, setCodec] = useSetting(codecSetting);
+
+    return (
+      <>
+        <h4>{header}</h4>
+        <FieldRow>
+          <InputField
+            id={`${id}Toggle`}
+            label={toggleLabel}
+            description={description}
+            type="checkbox"
+            checked={advancedEnabled}
+            onChange={(e): void => setAdvancedEnabled(e.target.checked)}
+          />
+        </FieldRow>
+        {advancedEnabled && (
+          <>
+            <div className={settingsStyles.volumeSlider}>
+              <label htmlFor={`${id}Resolution`}>
+                {t("settings.resolution_label", "Resolution")}
+              </label>
+              <select
+                id={`${id}Resolution`}
+                value={resolution}
+                onChange={(e): void => setResolution(e.target.value)}
+              >
+                {resolutionOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className={settingsStyles.volumeSlider}>
+              <label>
+                {t("settings.framerate_label", "Framerate")}
+                {": "}
+                <span className={settingsStyles.settingValue}>
+                  {framerateRaw} fps
+                </span>
+              </label>
+              <Slider
+                label={t("settings.framerate_label", "Framerate")}
+                value={framerateRaw}
+                onValueChange={setFramerateRaw}
+                onValueCommit={setFramerate}
+                min={5}
+                max={60}
+                step={5}
+                tooltipFormatter={(v): string => `${v} fps`}
+              />
+            </div>
+            <div className={settingsStyles.volumeSlider}>
+              <label>
+                {t("settings.bitrate_label", "Bitrate")}
+                {": "}
+                <span className={settingsStyles.settingValue}>
+                  {(bitrateRaw / 1_000_000).toFixed(1)} Mbps
+                </span>
+              </label>
+              <Slider
+                label={t("settings.bitrate_label", "Bitrate")}
+                value={bitrateRaw}
+                onValueChange={setBitrateRaw}
+                onValueCommit={setBitrate}
+                min={bitrateRange.min}
+                max={bitrateRange.max}
+                step={bitrateRange.step}
+                tooltipFormatter={(v): string =>
+                  `${(v / 1_000_000).toFixed(1)} Mbps`
+                }
+              />
+            </div>
+            <div className={settingsStyles.volumeSlider}>
+              <label htmlFor={`${id}Codec`}>
+                {t("settings.codec_label", "Codec")}
+              </label>
+              <select
+                id={`${id}Codec`}
+                value={codec}
+                onChange={(e): void => setCodec(e.target.value as VideoCodec)}
+              >
+                <option value="vp8">VP8</option>
+                <option value="vp9">VP9</option>
+                <option value="h264">H.264</option>
+                <option value="av1">AV1</option>
+              </select>
+            </div>
+          </>
+        )}
+      </>
+    );
+  };
+
+  const AudioProcessingSettings: React.FC = (): ReactNode => {
+    const [echoCancellation, setEchoCancellation] = useSetting(
+      echoCancellationSetting,
+    );
+    const [noiseSuppression, setNoiseSuppression] = useSetting(
+      noiseSuppressionSetting,
+    );
+    const [autoGainControl, setAutoGainControl] = useSetting(
+      autoGainControlSetting,
+    );
+
+    return (
+      <>
+        <h4>{t("settings.audio_processing_header", "Audio processing")}</h4>
+        <p>
+          {t(
+            "settings.audio_processing_description",
+            "Changes apply on next call join.",
+          )}
+        </p>
+        <FieldRow>
+          <InputField
+            id="echoCancellation"
+            label={t("settings.echo_cancellation_label", "Echo cancellation")}
+            type="checkbox"
+            checked={echoCancellation}
+            onChange={(e): void => setEchoCancellation(e.target.checked)}
+          />
+        </FieldRow>
+        <FieldRow>
+          <InputField
+            id="noiseSuppression"
+            label={t("settings.noise_suppression_label", "Noise suppression")}
+            type="checkbox"
+            checked={noiseSuppression}
+            onChange={(e): void => setNoiseSuppression(e.target.checked)}
+          />
+        </FieldRow>
+        <FieldRow>
+          <InputField
+            id="autoGainControl"
+            label={t(
+              "settings.auto_gain_control_label",
+              "Automatic gain control",
+            )}
+            type="checkbox"
+            checked={autoGainControl}
+            onChange={(e): void => setAutoGainControl(e.target.checked)}
+          />
+        </FieldRow>
+      </>
+    );
+  };
 
   return (
     <>
@@ -150,6 +397,8 @@ export const DeveloperSettingsTab: FC<Props> = ({
           id: client.getDeviceId() || "unknown",
         })}
       </p>
+      {keyRotation !== null && <KeyRotationStatus info={keyRotation} />}
+      <Separator />
       <FieldRow>
         <InputField
           id="duplicateTiles"
@@ -220,69 +469,103 @@ export const DeveloperSettingsTab: FC<Props> = ({
             },
             [setAlwaysShowIphoneEarpiece],
           )}
-        />{" "}
+        />
+      </FieldRow>
+      <FieldRow>
+        <InputField
+          id="enableLivekitExtendedLogs"
+          type="checkbox"
+          label="Enable extended livekit logs"
+          checked={enableExtendedLivekitLogs}
+          onChange={useCallback(
+            (event: ChangeEvent<HTMLInputElement>): void => {
+              setEnableExtendedLivekitLogs(event.target.checked);
+            },
+            [setEnableExtendedLivekitLogs],
+          )}
+        />
       </FieldRow>
       <EditInPlace
         onSubmit={(e) => e.preventDefault()}
         helpLabel={
-          customLivekitUrl === null
-            ? t("developer_mode.custom_livekit_url.from_config")
-            : t("developer_mode.custom_livekit_url.current_url") +
-              customLivekitUrl
+          customTransport === null
+            ? t("developer_mode.custom_transport.from_config")
+            : t("developer_mode.custom_transport.current") +
+              JSON.stringify(customTransport)
         }
-        label={t("developer_mode.custom_livekit_url.label")}
-        saveButtonLabel={t("developer_mode.custom_livekit_url.save")}
-        savingLabel={t("developer_mode.custom_livekit_url.saving")}
-        cancelButtonLabel={t("developer_mode.custom_livekit_url.reset")}
+        label={t("developer_mode.custom_transport.label")}
+        saveButtonLabel={t("developer_mode.custom_transport.save")}
+        savingLabel={t("developer_mode.custom_transport.saving")}
+        cancelButtonLabel={t("developer_mode.custom_transport.reset")}
         onSave={useCallback(
-          (e: React.FormEvent<HTMLFormElement>) => {
-            setCustomLivekitUrl(
-              customLivekitUrlTextBuffer === ""
-                ? null
-                : customLivekitUrlTextBuffer,
-            );
+          async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
+            if (roomId === undefined || customTransportTextBuffer === "") {
+              setCustomTransport(null);
+              return;
+            }
+
+            try {
+              const userId = client.getUserId();
+              const deviceId = client.getDeviceId();
+              const serverName = client.getDomain();
+
+              if (userId === null || deviceId === null || serverName === null) {
+                throw new Error("Invalid user, device ID or server name");
+              }
+              const transport = JSON.parse(customTransportTextBuffer);
+              // Validate the transport by attempting to get a token for it
+              await authenticateWithTransport({
+                client,
+                membership: { userId, deviceId, memberId: "" },
+                transport,
+                serverName: transport.server_name ?? serverName,
+                roomId,
+                slotId: "org.example.fake-slot#room",
+                role: "publisher",
+                logger,
+              });
+              setCustomTransportUpdateError(null);
+              setCustomTransport(transport);
+            } catch {
+              setCustomTransportUpdateError(
+                "invalid transport (did not update)",
+              );
+            }
           },
-          [setCustomLivekitUrl, customLivekitUrlTextBuffer],
+          [customTransportTextBuffer, setCustomTransport, client, roomId],
         )}
-        value={customLivekitUrlTextBuffer ?? ""}
+        value={customTransportTextBuffer}
         onChange={useCallback(
           (event: ChangeEvent<HTMLInputElement>): void => {
-            setCustomLivekitUrlTextBuffer(event.target.value);
+            setCustomTransportTextBuffer(event.target.value);
           },
-          [setCustomLivekitUrlTextBuffer],
+          [setCustomTransportTextBuffer],
         )}
         onCancel={useCallback(
           (e: React.FormEvent<HTMLFormElement>) => {
-            setCustomLivekitUrl(null);
+            setCustomTransport(null);
           },
-          [setCustomLivekitUrl],
+          [setCustomTransport],
         )}
-      />
+        serverInvalid={customTransportUpdateError !== null}
+      >
+        {customTransportUpdateError !== null && (
+          <ErrorMessage>{customTransportUpdateError}</ErrorMessage>
+        )}
+      </EditInPlace>
+      <Separator />
       <Heading as="h3" type="body" weight="semibold" size="lg">
         {t("developer_mode.matrixRTCMode.title")}
       </Heading>
+      {matrixRTCModeForced && <p>Your deployment overrides the mode.</p>}
       <Form>
         <InlineField
           name={matrixRTCModeRadioGroup}
           control={
             <RadioControl
-              checked={matrixRTCMode === MatrixRTCMode.Legacy}
-              value={MatrixRTCMode.Legacy}
-              onChange={onMatrixRTCModeChange}
-            />
-          }
-        >
-          <Label>{t("developer_mode.matrixRTCMode.Legacy.label")}</Label>
-          <HelpMessage>
-            {t("developer_mode.matrixRTCMode.Legacy.description")}
-          </HelpMessage>
-        </InlineField>
-        <InlineField
-          name={matrixRTCModeRadioGroup}
-          control={
-            <RadioControl
-              checked={matrixRTCMode === MatrixRTCMode.Compatibility}
+              checked={effectiveMatrixRTCMode === MatrixRTCMode.Compatibility}
               value={MatrixRTCMode.Compatibility}
+              disabled={matrixRTCModeForced}
               onChange={onMatrixRTCModeChange}
             />
           }
@@ -296,9 +579,9 @@ export const DeveloperSettingsTab: FC<Props> = ({
           name={matrixRTCModeRadioGroup}
           control={
             <RadioControl
-              checked={matrixRTCMode === MatrixRTCMode.Matrix_2_0}
+              checked={effectiveMatrixRTCMode === MatrixRTCMode.Matrix_2_0}
               value={MatrixRTCMode.Matrix_2_0}
-              disabled={!stickyEventsSupported}
+              disabled={matrixRTCModeForced || !stickyEventsSupported}
               onChange={onMatrixRTCModeChange}
             />
           }
@@ -309,44 +592,95 @@ export const DeveloperSettingsTab: FC<Props> = ({
           </HelpMessage>
         </InlineField>
       </Form>
-      {livekitRooms?.map((livekitRoom) => (
-        <div className={styles.livekit_room_box}>
-          <h4>
-            {t("developer_mode.livekit_sfu", {
-              url: livekitRoom.url || "unknown",
-            })}
-          </h4>
-          <p>LivekitAlias: {livekitRoom.livekitAlias}</p>
-          <p>connectionState (wont hot reload): {livekitRoom.room.state}</p>
-          {livekitRoom.isLocal && <p>ws-url: {localSfuUrl?.href}</p>}
-          <p>
-            {t("developer_mode.livekit_server_info")}(
-            {livekitRoom.isLocal ? "local" : "remote"})
-          </p>
-          <pre className={styles.pre}>
-            {livekitRoom.room.serverInfo
-              ? JSON.stringify(livekitRoom.room.serverInfo, null, 2)
-              : "undefined"}
-            {livekitRoom.room.metadata}
-          </pre>
-          <p>Local Participant</p>
-          <pre className={styles.pre}>
-            {livekitRoom.room.localParticipant.identity}
-          </pre>
-          <p>Remote Participants</p>
-          <ul>
-            {Array.from(livekitRoom.room.remoteParticipants.keys()).map(
-              (id) => (
-                <li key={id}>{id}</li>
-              ),
-            )}
-          </ul>
-        </div>
+      {transports?.map(({ transport, local }) => (
+        <TransportBox key={transport.id} transport={transport} local={local} />
       ))}
+      <Separator />
+      <MediaQualitySettings
+        id="camera"
+        header={t("settings.camera_header", "Camera quality")}
+        toggleLabel={t(
+          "settings.advanced_camera_label",
+          "Advanced camera settings",
+        )}
+        description={t(
+          "settings.advanced_camera_description",
+          "Configure resolution, framerate, bitrate, and codec for camera video. Changes apply on next call join.",
+        )}
+        toggleSetting={advancedCameraSetting}
+        resolutionSetting={cameraResolutionSetting}
+        framerateSetting={cameraFramerateSetting}
+        bitrateSetting={cameraBitrateSetting}
+        codecSetting={cameraCodecSetting}
+        resolutionOptions={[
+          { value: "640x360", label: "360p" },
+          { value: "960x540", label: "540p" },
+          { value: "1280x720", label: "720p" },
+          { value: "1920x1080", label: "1080p" },
+          { value: "2560x1440", label: "1440p" },
+        ]}
+        bitrateRange={{ min: 200_000, max: 8_000_000, step: 100_000 }}
+      />
+      <Separator />
+      <MediaQualitySettings
+        id="screenShare"
+        header={t("settings.screen_share_header", "Screen sharing")}
+        toggleLabel={t(
+          "settings.advanced_screen_share_label",
+          "Advanced screen share settings",
+        )}
+        description={t(
+          "settings.advanced_screen_share_description",
+          "Configure resolution, framerate, bitrate, and codec for screen sharing",
+        )}
+        toggleSetting={advancedScreenShareSetting}
+        resolutionSetting={screenShareResolutionSetting}
+        framerateSetting={screenShareFramerateSetting}
+        bitrateSetting={screenShareBitrateSetting}
+        codecSetting={screenShareCodecSetting}
+        resolutionOptions={[
+          { value: "1024x576", label: "576p" },
+          { value: "1280x720", label: "720p" },
+          { value: "1920x1080", label: "1080p" },
+          { value: "2560x1440", label: "1440p" },
+          { value: "3840x2160", label: "4K" },
+        ]}
+        bitrateRange={{ min: 500_000, max: 15_000_000, step: 500_000 }}
+      />
+      <Separator />
+      <AudioProcessingSettings />
+      <Separator />
       <p>{t("developer_mode.environment_variables")}</p>
-      <pre>{JSON.stringify(env, null, 2)}</pre>
+      <pre className={styles.pre}>{JSON.stringify(env, null, 2)}</pre>
       <p>{t("developer_mode.url_params")}</p>
-      <pre>{JSON.stringify(urlParams, null, 2)}</pre>
+      <pre className={styles.pre}>{JSON.stringify(urlParams, null, 2)}</pre>
     </>
+  );
+};
+
+/** The text shown in the custom transport field for a given setting value. */
+function transportText(transport: UnstableLivekitTransport | null): string {
+  return transport === null ? "" : JSON.stringify(transport);
+}
+
+const TransportBox: FC<TransportInfo> = ({ transport, local }) => {
+  const { t } = useTranslation();
+  const resolved = useBehavior(transport.resolved$);
+  return (
+    <div className={styles.livekit_room_box}>
+      <h4>{t("developer_mode.livekit_sfu", { url: transport.id })}</h4>
+      <p>
+        {t("developer_mode.livekit_server_info")}({local ? "local" : "remote"})
+      </p>
+      <pre className={styles.pre}>
+        {resolved === undefined
+          ? "not connected"
+          : JSON.stringify(
+              { ...resolved, token: resolved.token && "<redacted>" },
+              null,
+              2,
+            )}
+      </pre>
+    </div>
   );
 };

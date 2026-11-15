@@ -138,12 +138,12 @@ export const EventDetails: FC<Props> = ({
           {formatTimeOfDay(i18n.language, meeting.scheduledEnd)}
         </Text>
         {meeting.timezone !== viewerTimezone && (
-          <Text size="sm" className={styles.note}>
+          <Text size="md" className={styles.note}>
             {t("calendar.scheduled_in_zone", { timezone: meeting.timezone })}
           </Text>
         )}
         {meeting.organizerName !== "" && (
-          <Text size="sm" className={styles.note}>
+          <Text size="md" className={styles.note}>
             {t("calendar.organized_by", { name: meeting.organizerName })}
           </Text>
         )}
@@ -151,14 +151,14 @@ export const EventDetails: FC<Props> = ({
 
       <div className={styles.actions}>
         {joinPath !== undefined && (
-          <Button as={Link} to={joinPath} size="sm" Icon={VideoCallIcon}>
+          <Button as={Link} to={joinPath} size="md" Icon={VideoCallIcon}>
             {t("calendar.join")}
           </Button>
         )}
         {meeting.meetLink !== "" && (
           <Button
             kind="secondary"
-            size="sm"
+            size="md"
             Icon={CopyIcon}
             onClick={onCopyLink}
           >
@@ -169,12 +169,12 @@ export const EventDetails: FC<Props> = ({
 
       {canModify && !editing && !confirming && (
         <div className={styles.actions}>
-          <Button kind="secondary" size="sm" onClick={onEdit}>
+          <Button kind="secondary" size="md" onClick={onEdit}>
             {t("calendar.reschedule")}
           </Button>
           <Button
             kind="secondary"
-            size="sm"
+            size="md"
             destructive
             onClick={() => setConfirming(true)}
           >
@@ -187,19 +187,19 @@ export const EventDetails: FC<Props> = ({
         <form className={styles.form} onSubmit={onSave}>
           <div className={styles.fields}>
             <label className={styles.field} htmlFor={dateId}>
-              <Text size="sm" className={styles.note}>
+              <Text size="md" className={styles.note}>
                 {t("schedule_meeting.date")}
               </Text>
               <DateField id={dateId} value={date} onChange={setDate} />
             </label>
             <label className={styles.field} htmlFor={timeId}>
-              <Text size="sm" className={styles.note}>
+              <Text size="md" className={styles.note}>
                 {t("schedule_meeting.time")}
               </Text>
               <TimeField id={timeId} value={time} onChange={setTime} />
             </label>
             <label className={styles.field} htmlFor={durationId}>
-              <Text size="sm" className={styles.note}>
+              <Text size="md" className={styles.note}>
                 {t("schedule_meeting.duration")}
               </Text>
               <select
@@ -219,13 +219,13 @@ export const EventDetails: FC<Props> = ({
             </label>
           </div>
           <div className={styles.actions}>
-            <Button type="submit" size="sm" disabled={busy}>
+            <Button type="submit" size="md" disabled={busy}>
               {busy ? t("meetings.saving") : t("meetings.save")}
             </Button>
             <Button
               type="button"
               kind="secondary"
-              size="sm"
+              size="md"
               onClick={() => setEditing(false)}
             >
               {t("meetings.cancel")}
@@ -236,10 +236,10 @@ export const EventDetails: FC<Props> = ({
 
       {canModify && confirming && (
         <div className={styles.confirm}>
-          <Text size="sm">{t("calendar.cancel_confirm")}</Text>
+          <Text size="md">{t("calendar.cancel_confirm")}</Text>
           <div className={styles.actions}>
             <Button
-              size="sm"
+              size="md"
               destructive
               disabled={busy}
               onClick={onCancelMeeting}
@@ -248,7 +248,7 @@ export const EventDetails: FC<Props> = ({
             </Button>
             <Button
               kind="secondary"
-              size="sm"
+              size="md"
               onClick={() => setConfirming(false)}
             >
               {t("calendar.keep_meeting")}
@@ -258,7 +258,7 @@ export const EventDetails: FC<Props> = ({
       )}
 
       {error !== undefined && (
-        <Text size="sm" className={styles.error} role="alert">
+        <Text size="md" className={styles.error} role="alert">
           {error}
         </Text>
       )}

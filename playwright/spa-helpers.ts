@@ -101,9 +101,7 @@ async function setRtcModeFromSettings(
 
   // Move to Developer tab now
   await page.getByRole("tab", { name: "Developer" }).click();
-  if (mode == "legacy") {
-    await page.getByText("Legacy: state events").click();
-  } else if (mode == "2_0") {
+  if (mode == "2_0") {
     await page.getByText("Matrix 2.0").click();
   } else {
     // compat
@@ -114,35 +112,45 @@ async function setRtcModeFromSettings(
 }
 
 /**
+ * Makes the delayed-leave delegation support probes fail so that the client
+ * manages its delayed leave event itself instead of delegating it to the
+ * backend.
+ *
+ * Must be installed before the page joins a call.
+ */
+async function disableLeaveDelegation(page: Page): Promise<void> {
+  // Covers both the transport probe (<livekit_service_url>/delegate_delayed_leave)
+  // and the homeserver probe (MSC4195, .../rtc/livekit/delegate_delayed_leave).
+  await page.route("**/delegate_delayed_leave", async (route) =>
+    route.fulfill({
+      status: 404,
+      headers: { "Access-Control-Allow-Origin": "*" },
+    }),
+  );
+}
+
+/**
  * Expect a certain number of video tiles to be present and visible.
  */
 async function expectVideoTilesCount(page: Page, count: number): Promise<void> {
-  await expect(page.getByTestId("videoTile")).toHaveCount(2);
+  await expect(page.getByTestId("videoTile")).toHaveCount(count);
 
-  // There are no other options than to wait for all media to be ready?
-  // Or it is too flaky :/
-  await page.waitForTimeout(3000);
   // No one should be waiting for media
-  await expect(page.getByText("Waiting for media...")).not.toBeVisible();
+  await expect(page.getByText("Waiting for media...")).not.toBeVisible({
+    timeout: 10000,
+  });
 
-  // There should be 5 video elements, visible and autoplaying
-  const videoElements = await page.locator("video").all();
-  expect(videoElements.length).toBe(count);
-
-  const blockDisplayCount = await page
-    .locator("video")
-    .evaluateAll(
-      (videos: Element[]) =>
-        videos.filter(
-          (v: Element) => window.getComputedStyle(v).display === "block",
-        ).length,
-    );
-  expect(blockDisplayCount).toBe(count);
+  // There should be `count` video elements, visible and autoplaying
+  await expect(page.locator("video").filter({ visible: true })).toHaveCount(
+    count,
+    { timeout: 10000 },
+  );
 }
 
 export const SpaHelpers = {
   createCall,
   getCallInviteLink,
   joinCallFromInviteLink,
+  disableLeaveDelegation,
   expectVideoTilesCount,
 };

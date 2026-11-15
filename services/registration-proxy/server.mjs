@@ -142,10 +142,7 @@ async function registerGuest(displayName, origin, clientIp) {
     }
 
     // Retry on username collision
-    if (
-      regResp.data.errcode === "M_USER_IN_USE" &&
-      attempt < MAX_RETRIES - 1
-    ) {
+    if (regResp.data.errcode === "M_USER_IN_USE" && attempt < MAX_RETRIES - 1) {
       continue;
     }
 

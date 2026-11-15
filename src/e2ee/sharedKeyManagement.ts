@@ -12,8 +12,8 @@ import {
   setLocalStorageItemReactive,
   useLocalStorage,
 } from "../useLocalStorage";
-import { getUrlParams } from "../UrlParams";
-import { E2eeType } from "./e2eeType";
+import { getUrlParams, useUrlParams } from "../UrlParams";
+import { E2eeType, type EncryptionSystem } from "@element-hq/matrixrtc-sdk";
 import { useClient } from "../ClientContext";
 import { Config } from "../config/Config";
 import { deriveSharedKey } from "./deriveKeyFromCode";
@@ -80,30 +80,45 @@ export function getKeyMaterialForAlias(alias: string): string | null {
   return localStorage.getItem(getKeyMaterialLocalStorageKey(alias));
 }
 
-export function getKeyForRoom(roomId: string): string | null {
-  const { roomId: urlRoomId, password } = getUrlParams();
-  if (roomId !== urlRoomId)
+/**
+ * The shared key for a room, preferring one supplied in the parameters Element
+ * Call was started with over whatever is in local storage. If the parameters
+ * are for another room, only the stored key is used, because the password in
+ * the parameters belongs to that other room.
+ */
+function keyForRoom(
+  roomId: string,
+  paramsRoomId: string | null,
+  password: string | null,
+): string | null {
+  const storedKey = localStorage.getItem(
+    getRoomSharedKeyLocalStorageKey(roomId),
+  );
+  if (roomId !== paramsRoomId) {
     logger.warn(
       "requested key for a roomId which is not the current call room id (from the URL)",
       roomId,
-      urlRoomId,
+      paramsRoomId,
     );
-  return (
-    password ?? localStorage.getItem(getRoomSharedKeyLocalStorageKey(roomId))
-  );
+    return storedKey;
+  }
+  return password ?? storedKey;
 }
 
-export type Unencrypted = { kind: E2eeType.NONE };
-export type SharedSecret = { kind: E2eeType.SHARED_KEY; secret: string };
-export type PerParticipantE2EE = { kind: E2eeType.PER_PARTICIPANT };
-export type EncryptionSystem = Unencrypted | SharedSecret | PerParticipantE2EE;
+export function getKeyForRoom(roomId: string): string | null {
+  const { roomId: paramsRoomId, password } = getUrlParams();
+  return keyForRoom(roomId, paramsRoomId, password);
+}
+
+export { type EncryptionSystem } from "@element-hq/matrixrtc-sdk";
 
 export function useRoomEncryptionSystem(roomId: string): EncryptionSystem {
   const { client } = useClient();
+  const { roomId: paramsRoomId, password } = useUrlParams();
 
   const [storedPassword, setStoredPassword] = useRoomSharedKey(
-    getRoomSharedKeyLocalStorageKey(roomId),
-    getKeyForRoom(roomId) ?? undefined,
+    roomId,
+    keyForRoom(roomId, paramsRoomId, password) ?? undefined,
   );
 
   const room = client?.getRoom(roomId);
@@ -116,7 +131,8 @@ export function useRoomEncryptionSystem(roomId: string): EncryptionSystem {
     const meetingStateType =
       Config.get().branding?.meeting_event_type ??
       "io.element.call.scheduled_meeting";
-    const meetingEvent = room.currentState.getStateEvents(
+    // Optional: a room the client has not yet filled in has no state
+    const meetingEvent = room.currentState?.getStateEvents(
       meetingStateType,
       "",
     );
@@ -142,7 +158,7 @@ export function useRoomEncryptionSystem(roomId: string): EncryptionSystem {
       .finally(() => setDeriving(false));
   }, [storedPassword, room, roomId, deriving, setStoredPassword]);
 
-  const e2eeSystem = <EncryptionSystem>useMemo(() => {
+  const e2eeSystem = useMemo<EncryptionSystem>(() => {
     if (!room) return { kind: E2eeType.NONE };
     if (storedPassword)
       return {

@@ -7,10 +7,37 @@ Please see LICENSE in the repository root for full details.
 */
 
 import { defineConfig, devices } from "@playwright/test";
+import { join } from "path";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { COMPONENT_HARNESS_URL } from "./playwright/component/harness.ts";
+import { SDK_HARNESS_URL } from "./playwright/sdk/harness.ts";
 
 const baseURL = process.env.USE_DOCKER
   ? "http://localhost:8080"
   : "https://localhost:3000";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Needed by the synapse admin API called in fixtures
+process.env.NODE_EXTRA_CA_CERTS = join(
+  __dirname,
+  "backend/dev_tls_local-ca.crt",
+);
+
+const desktopChrome = {
+  ...devices["Desktop Chrome"],
+  permissions: ["clipboard-write", "clipboard-read", "microphone", "camera"],
+  ignoreHTTPSErrors: true,
+  launchOptions: {
+    args: [
+      "--use-fake-ui-for-media-stream",
+      "--use-fake-device-for-media-stream",
+      "--mute-audio",
+    ],
+  },
+};
 
 /**
  * See https://playwright.dev/docs/test-configuration.
@@ -25,8 +52,20 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   /* Opt out of parallel tests on CI. */
   workers: process.env.CI ? 1 : undefined,
-  /* Reporter to use. See https://playwright.dev/docs/test-reporters */
-  reporter: "html",
+  /**
+   * Reporter to use. See https://playwright.dev/docs/test-reporters
+   *
+   * On CI, `list` prints a line per test as it finishes, which keeps the job
+   * log moving; `github` annotates failures on the PR; the `blob` format is
+   * uploaded by sharded CI runs and combined into a HTML report by the workflow.
+   */
+  reporter: process.env.CI
+    ? [["list"], ["github"], ["blob"]]
+    : [["list"], ["html"]],
+  /* Stop a broken run early on CI instead of waiting out every retry. */
+  maxFailures: process.env.CI ? 5 : undefined,
+  /* Under the job's 60 minute limit, so a hung run still ends with a report. */
+  globalTimeout: process.env.CI ? 50 * 60 * 1000 : undefined,
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
@@ -38,28 +77,27 @@ export default defineConfig({
   /* Configure projects for major browsers */
   projects: [
     {
+      // Builds the embedded package into the directory the other site's
+      // Element Web container serves it from (see docker-compose-playwright.yml).
+      name: "build-embedded",
+      testMatch: "**/widget/embedded/build.setup.ts",
+    },
+    {
       name: "chromium",
-      testIgnore: "**/mobile/**",
-      use: {
-        ...devices["Desktop Chrome"],
-        permissions: [
-          "clipboard-write",
-          "clipboard-read",
-          "microphone",
-          "camera",
-        ],
-        ignoreHTTPSErrors: true,
-        launchOptions: {
-          args: [
-            "--use-fake-ui-for-media-stream",
-            "--use-fake-device-for-media-stream",
-            "--mute-audio",
-          ],
-        },
-      },
+      testIgnore: ["**/mobile/**", "**/widget/**"],
+      use: desktopChrome,
+    },
+    {
+      // Element Call as a widget in Element Web, on Chromium. This uses its
+      // own project so that it can be sharded on CI.
+      name: "widget",
+      dependencies: ["build-embedded"],
+      testMatch: "**/widget/**/*.@(spec|test).ts",
+      use: desktopChrome,
     },
     {
       name: "firefox",
+      dependencies: ["build-embedded"],
       testIgnore: "**/mobile/**",
       use: {
         ...devices["Desktop Firefox"],
@@ -68,6 +106,16 @@ export default defineConfig({
           firefoxUserPrefs: {
             "permissions.default.microphone": 1,
             "permissions.default.camera": 1,
+            // Equivalent to Chromium's --use-fake-device-for-media-stream:
+            // feeds a synthetic media stream so getUserMedia and
+            // enumerateDevices work on CI runners without real hardware.
+            "media.navigator.streams.fake": true,
+            "media.navigator.permission.disabled": true,
+            // Vite serves HTTPS over HTTP/2, and Firefox intermittently stalls
+            // on Node's HTTP/2 server with a page that never finishes loading
+            // (one run in five or so, locally). Every server in the suite
+            // still speaks HTTP/1.1, so nothing is lost by insisting on it.
+            "network.http.http2.enabled": false,
           },
         },
       },
@@ -99,14 +147,41 @@ export default defineConfig({
   ],
 
   /* Run your local dev server before starting the tests */
-  webServer: {
-    command: "./scripts/playwright-webserver-command.sh",
-    url: baseURL,
-    reuseExistingServer: !process.env.CI,
-    ignoreHTTPSErrors: true,
-    gracefulShutdown: {
-      signal: "SIGTERM",
-      timeout: 500,
+  webServer: [
+    {
+      command: "./scripts/playwright-webserver-command.sh",
+      url: baseURL,
+      reuseExistingServer: !process.env.CI,
+      ignoreHTTPSErrors: true,
+      gracefulShutdown: {
+        signal: "SIGTERM",
+        timeout: 500,
+      },
     },
-  },
+    {
+      // The harness that embeds Element Call as a component. Always a Vite dev
+      // server, whether or not the app itself is being served from Docker,
+      // since there is nothing to build: it is a development page only.
+      command: "pnpm dev:component",
+      url: COMPONENT_HARNESS_URL,
+      reuseExistingServer: !process.env.CI,
+      ignoreHTTPSErrors: true,
+      gracefulShutdown: {
+        signal: "SIGTERM",
+        timeout: 500,
+      },
+    },
+    {
+      // The harness that uses the MatrixRTC SDK without Element Call. A Vite
+      // dev server for the same reason as the component's.
+      command: "pnpm dev:sdk",
+      url: SDK_HARNESS_URL,
+      reuseExistingServer: !process.env.CI,
+      ignoreHTTPSErrors: true,
+      gracefulShutdown: {
+        signal: "SIGTERM",
+        timeout: 500,
+      },
+    },
+  ],
 });

@@ -9,113 +9,200 @@ import {
   type FC,
   type JSX,
   Suspense,
+  useCallback,
   useEffect,
-  useMemo,
   useState,
 } from "react";
-import { BrowserRouter, Route, useLocation, Routes } from "react-router-dom";
+import {
+  BrowserRouter,
+  Route,
+  useLocation,
+  useNavigate,
+  Routes,
+} from "react-router-dom";
 import * as Sentry from "@sentry/react";
 import { TooltipProvider } from "@vector-im/compound-web";
 import { logger } from "matrix-js-sdk/lib/logger";
+import { type MatrixClient } from "matrix-js-sdk";
+import { I18nextProvider } from "react-i18next";
 
 import { HomePage } from "./home/HomePage";
 import { LoginPage } from "./auth/LoginPage";
 import { CalendarPage } from "./calendar/CalendarPage";
 import { RoomPage } from "./room/RoomPage";
-import { ClientProvider } from "./ClientContext";
+import { type ClientLoader, ClientProvider } from "./ClientContext";
 import { ErrorPage, LoadingPage } from "./FullScreenView";
 import { Initializer } from "./initializer";
-import { widget } from "./widget";
+import { type WidgetHelpers } from "./widget";
 import { useTheme } from "./useTheme";
-import { ProcessorProvider } from "./livekit/TrackProcessorContext";
+import { BackgroundEffectsProvider } from "./tracks/BackgroundEffectsContext";
 import { type AppViewModel } from "./state/AppViewModel";
 import { MediaDevicesContext } from "./MediaDevicesContext";
-import { getUrlParams, HeaderStyle } from "./UrlParams";
+import {
+  HeaderStyle,
+  UrlParamsProvider,
+  useUrlParams,
+  useUrlParamsFromLocation,
+} from "./UrlParams";
 import { AppBar } from "./AppBar";
 import { LicenseFooter } from "./LicenseFooter";
+import { BackgroundStyle } from "./UrlConfiguration";
+import { i18n } from "./utils/i18n";
+import { useRootElement } from "./RootElementContext";
+import {
+  createWidgetHostBridge,
+  HostBridgeProvider,
+  nullHostBridge,
+} from "./HostBridge";
+import { useInitial } from "./useInitial";
+import { LeaveToHomeProvider } from "./LeaveToHomeContext";
 
 const SentryRoute = Sentry.withSentryReactRouterV7Routing(Route);
+
+// Element Call's own session, for when no host supplies a client.
+// - Passed in here, not imported by ClientProvider: this module is only in the
+//   app builds, so the client setup and the store worker behind it stay out of
+//   the component package (see the `loadClient` prop).
+// - Imported on demand, as it was before, so that a widget, which gets its
+//   client from the host, never downloads it.
+// - Module-level, so that the provider's effect sees one stable loader.
+const loadStandaloneClient: ClientLoader = async (...args) =>
+  (await import("./utils/spa")).initSPA(...args);
 
 interface SimpleProviderProps {
   children: JSX.Element;
 }
 
+/**
+ * Supplies the URL-derived params to the rest of the app. Only the standalone
+ * and widget builds own the URL, so this lives here in the app shell rather
+ * than alongside the context itself.
+ */
+const LocationUrlParamsProvider: FC<SimpleProviderProps> = ({ children }) => {
+  const urlParams = useUrlParamsFromLocation();
+  return <UrlParamsProvider value={urlParams}>{children}</UrlParamsProvider>;
+};
+
+/**
+ * Supplies the way home. Only the app has one — its home page, with the list
+ * of recent calls — so this, too, lives in the app shell.
+ */
+const HomeProvider: FC<SimpleProviderProps> = ({ children }) => {
+  const navigate = useNavigate();
+  const leaveToHome = useCallback(() => {
+    navigate("/")?.catch((e) => logger.error("Failed to navigate home", e));
+  }, [navigate]);
+  return (
+    <LeaveToHomeProvider value={leaveToHome}>{children}</LeaveToHomeProvider>
+  );
+};
+
 const BackgroundProvider: FC<SimpleProviderProps> = ({ children }) => {
   const { pathname } = useLocation();
+  const { background } = useUrlParams();
+  const rootElement = useRootElement();
 
   useEffect(() => {
-    const body = document.getElementsByTagName("body")[0];
-    if (!["/login"].includes(pathname) && !widget) {
-      body.classList.add("aurora-bg");
-    } else {
-      body.classList.remove("aurora-bg");
-    }
-  }, [pathname]);
+    // The login page stays plain; everywhere else the chosen background shows.
+    rootElement.setAttribute(
+      "data-background",
+      pathname === "/login" ? BackgroundStyle.Solid : background,
+    );
+  }, [pathname, background, rootElement]);
 
-  return <>{children}</>;
+  return children;
 };
+
 const ThemeProvider: FC<SimpleProviderProps> = ({ children }) => {
   useTheme();
   return children;
 };
 
+/** Wraps the app in an {@link AppBar}, if the params ask for one. */
+const MaybeAppBar: FC<SimpleProviderProps> = ({ children }) => {
+  const { header } = useUrlParams();
+  return header === HeaderStyle.AppBar ? <AppBar>{children}</AppBar> : children;
+};
+
 interface Props {
   vm: AppViewModel;
+  /** A point of access to the widget API, if running as a widget. */
+  widget: WidgetHelpers | null;
 }
 
-export const App: FC<Props> = ({ vm }) => {
+export const App: FC<Props> = ({ vm, widget }) => {
+  // The standalone build has no host; the widget build's host is the client it
+  // is a widget of.
+  const hostBridge = useInitial(() =>
+    widget === null ? nullHostBridge : createWidgetHostBridge(widget),
+  );
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     Initializer.init()
       ?.then(async () => {
         if (loaded) return;
         setLoaded(true);
-        await widget?.api.sendContentLoaded();
+        await hostBridge.contentLoaded();
       })
       .catch(logger.error);
   });
 
-  // Since we are outside the router component, we cannot use useUrlParams here
-  const { header } = useMemo(getUrlParams, []);
-
-  const content = loaded ? (
-    <ClientProvider>
-      <MediaDevicesContext value={vm.mediaDevices}>
-        <ProcessorProvider>
-          <Sentry.ErrorBoundary
-            fallback={(error) => <ErrorPage error={error} widget={widget} />}
-          >
-            <Routes>
-              <SentryRoute path="/" element={<HomePage />} />
-              <SentryRoute path="/login" element={<LoginPage />} />
-              <SentryRoute path="/calendar" element={<CalendarPage />} />
-              {/* /register route removed - team accounts created via Synapse admin */}
-              <SentryRoute path="*" element={<RoomPage />} />
-            </Routes>
-          </Sentry.ErrorBoundary>
-        </ProcessorProvider>
-      </MediaDevicesContext>
-    </ClientProvider>
-  ) : (
-    <LoadingPage />
+  // As a widget, the client comes from the host over the widget API. Standalone,
+  // Element Call finds one itself, so there is nothing to wait for here.
+  const [widgetClient, setWidgetClient] = useState<MatrixClient | undefined>(
+    undefined,
   );
+  useEffect(() => {
+    if (widget === null) return;
+    widget.client
+      .then(setWidgetClient)
+      .catch((e) => logger.error("Failed to obtain the host's client", e));
+  }, [widget]);
+  const clientReady = widget === null || widgetClient !== undefined;
+
+  const content =
+    loaded && clientReady ? (
+      <ClientProvider client={widgetClient} loadClient={loadStandaloneClient}>
+        <MediaDevicesContext value={vm.mediaDevices}>
+          <BackgroundEffectsProvider effects={vm.backgroundEffects}>
+            <Sentry.ErrorBoundary
+              fallback={(error) => <ErrorPage error={error} />}
+            >
+              <Routes>
+                <SentryRoute path="/" element={<HomePage />} />
+                <SentryRoute path="/login" element={<LoginPage />} />
+                <SentryRoute path="/calendar" element={<CalendarPage />} />
+                {/* /register route removed - team accounts created via Synapse admin */}
+                <SentryRoute path="*" element={<RoomPage />} />
+              </Routes>
+            </Sentry.ErrorBoundary>
+          </BackgroundEffectsProvider>
+        </MediaDevicesContext>
+      </ClientProvider>
+    ) : (
+      <LoadingPage />
+    );
 
   return (
-    <BrowserRouter>
-      <BackgroundProvider>
-        <ThemeProvider>
-          <TooltipProvider>
-            <Suspense fallback={null}>
-              {header === HeaderStyle.AppBar ? (
-                <AppBar>{content}</AppBar>
-              ) : (
-                content
-              )}
-              {!widget && <LicenseFooter />}
-            </Suspense>
-          </TooltipProvider>
-        </ThemeProvider>
-      </BackgroundProvider>
-    </BrowserRouter>
+    <I18nextProvider i18n={i18n}>
+      <HostBridgeProvider value={hostBridge}>
+        <BrowserRouter>
+          <LocationUrlParamsProvider>
+            <HomeProvider>
+              <BackgroundProvider>
+                <ThemeProvider>
+                  <TooltipProvider>
+                    <Suspense fallback={null}>
+                      <MaybeAppBar>{content}</MaybeAppBar>
+                      {!widget && <LicenseFooter />}
+                    </Suspense>
+                  </TooltipProvider>
+                </ThemeProvider>
+              </BackgroundProvider>
+            </HomeProvider>
+          </LocationUrlParamsProvider>
+        </BrowserRouter>
+      </HostBridgeProvider>
+    </I18nextProvider>
   );
 };

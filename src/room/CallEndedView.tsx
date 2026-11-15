@@ -9,8 +9,6 @@ import { type FC, type FormEventHandler, useCallback, useState } from "react";
 import { type MatrixClient } from "matrix-js-sdk";
 import { Trans, useTranslation } from "react-i18next";
 import { Button, Heading, Text } from "@vector-im/compound-web";
-import { useNavigate } from "react-router-dom";
-import { logger } from "matrix-js-sdk/lib/logger";
 
 import styles from "./CallEndedView.module.css";
 import feedbackStyle from "../input/FeedbackInput.module.css";
@@ -19,9 +17,10 @@ import { Header, HeaderLogo, LeftNav, RightNav } from "../Header";
 import { PosthogAnalytics } from "../analytics/PosthogAnalytics";
 import { FieldRow, InputField } from "../input/Input";
 import { StarRatingInput } from "../input/StarRatingInput";
-import { Link } from "../button/Link";
 import { LinkButton } from "../button";
 import { productName } from "../branding";
+import { LeaveToHomeLink } from "../button/LeaveToHomeLink";
+import { useLeaveToHome } from "../LeaveToHomeContext";
 
 interface Props {
   client: MatrixClient;
@@ -39,7 +38,7 @@ export const CallEndedView: FC<Props> = ({
   endedCallId,
 }) => {
   const { t } = useTranslation();
-  const navigate = useNavigate();
+  const leaveToHome = useLeaveToHome();
 
   const { displayName } = useProfile(client);
   const [surveySubmitted, setSurveySubmitted] = useState(false);
@@ -69,14 +68,12 @@ export const CallEndedView: FC<Props> = ({
             setSurveySubmitted(true);
           } else if (!confineToRoom) {
             // if the user already has an account immediately go back to the home screen
-            navigate("/")?.catch((error) => {
-              logger.error("Failed to navigate to /", error);
-            });
+            leaveToHome?.();
           }
         }, 1000);
       }, 1000);
     },
-    [endedCallId, navigate, isPasswordlessUser, confineToRoom, starRating],
+    [endedCallId, leaveToHome, isPasswordlessUser, confineToRoom, starRating],
   );
 
   const guestFarewellDialog = isPasswordlessUser && (
@@ -158,7 +155,10 @@ export const CallEndedView: FC<Props> = ({
         </main>
         {!confineToRoom && (
           <Text className={styles.footer}>
-            <Link to="/"> {t("call_ended_view.not_now_button")} </Link>
+            <LeaveToHomeLink>
+              {" "}
+              {t("call_ended_view.not_now_button")}{" "}
+            </LeaveToHomeLink>
           </Text>
         )}
       </div>

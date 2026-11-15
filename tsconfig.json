@@ -4,6 +4,7 @@
     "module": "es2022",
     "jsx": "react-jsx",
     "lib": ["es2024", "dom", "dom.iterable"],
+    "skipLibCheck": true,
 
     // From Matrix-JS-SDK
     "strict": true,
@@ -19,6 +20,10 @@
     "useDefineForClassFields": false,
     "allowImportingTsExtensions": true,
     "paths": {
+      // Element Call imports the SDK by its package name, so that the move to a
+      // published dependency changes nothing but this line (and the matching
+      // alias in vite.config.ts)
+      "@element-hq/matrixrtc-sdk": ["./sdk/index.ts"],
       // These imports within @livekit/components-core and
       // @livekit/components-react are broken under the "bundler" module
       // resolution mode, so we need to resolve them manually
@@ -37,7 +42,7 @@
       "livekit-client/dist/src/proto/livekit_models_pb": [
         "./node_modules/@livekit/protocol/src/gen/livekit_models_pb.d.ts"
       ]
-    },
+    }
 
     // TODO: Enable the following options later.
     // "forceConsistentCasingInFileNames": true,
@@ -47,14 +52,15 @@
     // "noPropertyAccessFromIndexSignature": true,
     // "noUncheckedIndexedAccess": true,
     // "noUnusedParameters": true,
-
-    "plugins": [{ "name": "typescript-eslint-language-service" }]
   },
   "include": [
     "./src/**/*.ts",
     "./src/**/*.tsx",
     "./playwright/**/*.ts",
-    "./sdk/**/*.ts"
+    "./sdk/**/*.ts",
+    "./sdk-target-based-on-call-view-model/**/*.ts",
+    "./component/**/*.ts",
+    "./component/**/*.tsx"
   ],
   "exclude": ["**.test.ts"]
 }

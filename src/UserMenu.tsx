@@ -66,7 +66,7 @@ export const UserMenu: FC<Props> = ({
     }
 
     return arr;
-  }, [isAuthenticated, isPasswordlessUser, displayName, preventNavigation, t]);
+  }, [isAuthenticated, displayName, preventNavigation, t]);
 
   const [open, setOpen] = useState(false);
 

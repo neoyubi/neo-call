@@ -6,41 +6,45 @@ Please see LICENSE in the repository root for full details.
 */
 
 import { test, expect } from "vitest";
-import { type RTCCallIntent } from "matrix-js-sdk/lib/matrixrtc";
+import {
+  RTC_CALL_INTENT_AUDIO,
+  RTC_CALL_INTENT_VIDEO,
+  type RTCCallIntent,
+} from "matrix-js-sdk/lib/matrixrtc";
 
 import { calculateInitialMuteState } from "./initialMuteState";
 
 test.each<{
   callIntent: RTCCallIntent;
-  isWidgetMode: boolean;
+  allowJoinUnmutedViaIntent: boolean;
 }>([
-  { callIntent: "audio", isWidgetMode: false },
-  { callIntent: "audio", isWidgetMode: true },
-  { callIntent: "video", isWidgetMode: false },
-  { callIntent: "video", isWidgetMode: true },
-  { callIntent: "unknown", isWidgetMode: false },
-  { callIntent: "unknown", isWidgetMode: true },
+  { callIntent: RTC_CALL_INTENT_AUDIO, allowJoinUnmutedViaIntent: false },
+  { callIntent: RTC_CALL_INTENT_AUDIO, allowJoinUnmutedViaIntent: true },
+  { callIntent: RTC_CALL_INTENT_VIDEO, allowJoinUnmutedViaIntent: false },
+  { callIntent: RTC_CALL_INTENT_VIDEO, allowJoinUnmutedViaIntent: true },
+  { callIntent: "unknown", allowJoinUnmutedViaIntent: false },
+  { callIntent: "unknown", allowJoinUnmutedViaIntent: true },
 ])(
-  "Should allow to unmute on start if not skipping lobby (callIntent: $callIntent, packageType: $packageType)",
-  ({ callIntent, isWidgetMode }) => {
+  "Should allow to unmute on start if not skipping lobby (callIntent: $callIntent, allowJoinUnmutedViaIntent: $allowJoinUnmutedViaIntent)",
+  ({ callIntent, allowJoinUnmutedViaIntent }) => {
     const { audioEnabled, videoEnabled } = calculateInitialMuteState(
       false,
       callIntent,
-      isWidgetMode,
+      allowJoinUnmutedViaIntent,
     );
     expect(audioEnabled).toBe(true);
-    expect(videoEnabled).toBe(callIntent !== "audio");
+    expect(videoEnabled).toBe(callIntent !== RTC_CALL_INTENT_AUDIO);
   },
 );
 
 test.each<{
   callIntent: RTCCallIntent;
 }>([
-  { callIntent: "audio" },
-  { callIntent: "video" },
+  { callIntent: RTC_CALL_INTENT_AUDIO },
+  { callIntent: RTC_CALL_INTENT_VIDEO },
   { callIntent: "unknown" },
 ])(
-  "Should always mute on start if skipping lobby on non widget mode (callIntent: $callIntent)",
+  "Should always mute on start if skipping lobby and the host does not vouch for the intent (callIntent: $callIntent)",
   ({ callIntent }) => {
     const { audioEnabled, videoEnabled } = calculateInitialMuteState(
       true,
@@ -55,11 +59,11 @@ test.each<{
 test.each<{
   callIntent: RTCCallIntent;
 }>([
-  { callIntent: "audio" },
-  { callIntent: "video" },
+  { callIntent: RTC_CALL_INTENT_AUDIO },
+  { callIntent: RTC_CALL_INTENT_VIDEO },
   { callIntent: "unknown" },
 ])(
-  "Can start unmuted if skipping lobby on widget mode (callIntent: $callIntent)",
+  "Can start unmuted if skipping lobby and the host vouches for the intent (callIntent: $callIntent)",
   ({ callIntent }) => {
     const { audioEnabled, videoEnabled } = calculateInitialMuteState(
       true,
@@ -67,6 +71,6 @@ test.each<{
       true,
     );
     expect(audioEnabled).toBe(true);
-    expect(videoEnabled).toBe(callIntent !== "audio");
+    expect(videoEnabled).toBe(callIntent !== RTC_CALL_INTENT_AUDIO);
   },
 );

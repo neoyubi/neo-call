@@ -11,6 +11,7 @@ import {
   type Room,
   type MatrixClient,
   EventType,
+  JoinRule,
 } from "matrix-js-sdk";
 import {
   type FC,
@@ -118,7 +119,7 @@ const CallTile: FC<CallTileProps> = ({
       e.preventDefault();
       const newClosed = !effectiveClosed;
       setClosedOverride(newClosed);
-      const newRule = newClosed ? "invite" : "knock";
+      const newRule = newClosed ? JoinRule.Invite : JoinRule.Knock;
       void client
         .sendStateEvent(
           room.roomId,
@@ -148,7 +149,7 @@ const CallTile: FC<CallTileProps> = ({
       const myUserId = client.getUserId()!;
       const kickAll = members
         .filter((m) => m.userId !== myUserId)
-        .map((m) =>
+        .map(async (m) =>
           client.kick(room.roomId, m.userId).catch((err: unknown) => {
             logger.error(`Failed to kick ${m.userId}`, err);
           }),

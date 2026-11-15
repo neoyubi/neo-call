@@ -34,7 +34,6 @@ import { useUrlParams } from "../UrlParams";
 import { usePageTitle } from "../usePageTitle";
 import { useBehavior } from "../useBehavior";
 import { useMediaQuery } from "../useMediaQuery";
-import { widget } from "../widget";
 import {
   useScheduledMeetings,
   type ScheduledMeeting,
@@ -66,6 +65,7 @@ import {
   workingHours,
 } from "./dates";
 import styles from "./CalendarPage.module.css";
+import modalStyles from "../Modal.module.css";
 
 export const CalendarPage: FC = () => {
   const { t } = useTranslation();
@@ -74,7 +74,7 @@ export const CalendarPage: FC = () => {
 
   if (!clientState) return <LoadingPage />;
   if (clientState.state === "error")
-    return <ErrorPage widget={widget} error={clientState.error} />;
+    return <ErrorPage error={clientState.error} />;
   if (!clientState.authenticated) return <Navigate to="/" replace />;
   return <Calendar client={clientState.authenticated.client} />;
 };
@@ -228,18 +228,18 @@ const Calendar: FC<{ client: MatrixClient }> = ({ client }) => {
             </IconButton>
             <Button
               kind="secondary"
-              size="sm"
+              size="md"
               onClick={() => navigate({ date: startOfDay(new Date(now)) })}
             >
               {t("calendar.today")}
             </Button>
-            <Heading as="h1" size="sm" weight="semibold">
+            <Heading as="h1" size="md" weight="semibold">
               {label}
             </Heading>
           </div>
           {canSchedule && (
             <Button
-              size="sm"
+              size="md"
               Icon={PlusIcon}
               onClick={() =>
                 onSelectSlot(
@@ -329,6 +329,7 @@ const Calendar: FC<{ client: MatrixClient }> = ({ client }) => {
       <Modal
         title={t("schedule_meeting.title")}
         hideHeader
+        classNameModal={modalStyles.fitContent}
         open={slot !== null}
         onDismiss={() => setSlot(null)}
       >

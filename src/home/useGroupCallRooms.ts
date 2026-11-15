@@ -10,6 +10,7 @@ import {
   type RoomMember,
   type Room,
   RoomEvent,
+  RoomStateEvent,
   EventTimeline,
   EventType,
   JoinRule,
@@ -193,8 +194,7 @@ export function useGroupCallRooms(client: MatrixClient): GroupCallRoom[] {
           const content = powerLevels.getContent();
           const userLevel =
             content.users?.[myUserId] ?? content.users_default ?? 0;
-          const joinRulesLevel =
-            content.events?.["m.room.join_rules"];
+          const joinRulesLevel = content.events?.["m.room.join_rules"];
           if (joinRulesLevel !== undefined) {
             // Explicit override exists: use it directly
             isAdmin = userLevel >= joinRulesLevel;
@@ -235,14 +235,14 @@ export function useGroupCallRooms(client: MatrixClient): GroupCallRoom[] {
       updateRooms,
     );
     client.on(RoomEvent.MyMembership, updateRooms);
-    client.on(RoomEvent.CurrentStateUpdated, updateRooms);
+    client.on(RoomStateEvent.Events, updateRooms);
     return (): void => {
       client.matrixRTC.off(
         MatrixRTCSessionManagerEvents.SessionStarted,
         updateRooms,
       );
       client.off(RoomEvent.MyMembership, updateRooms);
-      client.off(RoomEvent.CurrentStateUpdated, updateRooms);
+      client.off(RoomStateEvent.Events, updateRooms);
     };
   }, [client]);
 

@@ -43,7 +43,9 @@ Please see LICENSE in the repository root for full details.
   font-size: var(--cpd-font-size-body-md);
   font-weight: 500;
   color: var(--cpd-color-text-secondary);
-  transition: color 0.15s, border-color 0.15s;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .tab:hover {
@@ -84,12 +86,15 @@ Please see LICENSE in the repository root for full details.
   color: var(--cpd-color-text-primary);
   caret-color: var(--cpd-color-text-action-accent);
   outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 
 .codeBox:focus {
   border-color: var(--cpd-color-text-action-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--cpd-color-text-action-accent) 25%, transparent);
+  box-shadow: 0 0 0 2px
+    color-mix(in srgb, var(--cpd-color-text-action-accent) 25%, transparent);
 }
 
 .codeBox::placeholder {

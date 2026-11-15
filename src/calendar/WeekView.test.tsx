@@ -1,6 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import i18n from "i18next";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { axe } from "vitest-axe";
 
@@ -8,6 +7,9 @@ import { type ScheduledMeeting } from "../home/useScheduledMeetings";
 import { mockConfig } from "../utils/test";
 import { MINUTES_PER_DAY, formatDay } from "./dates";
 import { NARROW_VIEWPORT, WeekView } from "./WeekView";
+import weekStyles from "./WeekView.module.css";
+import chipStyles from "./EventChip.module.css";
+import { i18n } from "../utils/i18n";
 
 // Pinned to a zone with daylight saving so the transition days are real:
 // 29 March 2026 is 23 hours long and 25 October 2026 is 25 hours long.
@@ -92,7 +94,9 @@ function pointer(
  * in these tests reads directly as minutes from midnight.
  */
 function measureColumns(container: HTMLElement): void {
-  for (const column of container.querySelectorAll<HTMLElement>(".column"))
+  for (const column of container.querySelectorAll<HTMLElement>(
+    `.${weekStyles.column}`,
+  ))
     column.getBoundingClientRect = (): DOMRect =>
       ({ top: 0, height: MINUTES_PER_DAY }) as DOMRect;
 }
@@ -105,11 +109,10 @@ function drag(
   options?: { pointerType?: string },
 ): void {
   measureColumns(container);
-  const column = container.querySelector<HTMLElement>(".column")!;
-  const slot =
-    container.querySelectorAll<HTMLElement>(".slotButton")[
-      Math.floor(fromY / 60)
-    ];
+  const column = container.querySelector<HTMLElement>(`.${weekStyles.column}`)!;
+  const slot = container.querySelectorAll<HTMLElement>(
+    `.${weekStyles.slotButton}`,
+  )[Math.floor(fromY / 60)];
   act(() => {
     fireEvent(slot, pointer("pointerdown", fromY, options));
     fireEvent(column, pointer("pointermove", toY, options));
@@ -136,13 +139,13 @@ afterEach(() => {
 describe("WeekView", () => {
   it("shows seven days when there is room", () => {
     const { container } = renderWeek();
-    expect(container.querySelectorAll(".column")).toHaveLength(7);
+    expect(container.querySelectorAll(`.${weekStyles.column}`)).toHaveLength(7);
   });
 
   it("never shows seven columns of time on a narrow viewport", () => {
     setViewport(true);
     const { container } = renderWeek();
-    expect(container.querySelectorAll(".column")).toHaveLength(1);
+    expect(container.querySelectorAll(`.${weekStyles.column}`)).toHaveLength(1);
     expect(
       screen.getByLabelText(formatDay(i18n.language, WEEK[2])),
     ).toBeInTheDocument();
@@ -150,20 +153,24 @@ describe("WeekView", () => {
 
   it("shows a single day when given one", () => {
     const { container } = renderWeek({ days: [WEEK[0]] });
-    expect(container.querySelectorAll(".column")).toHaveLength(1);
+    expect(container.querySelectorAll(`.${weekStyles.column}`)).toHaveLength(1);
   });
 
   it("renders the whole day, dimming the hours outside working time", () => {
     const { container } = renderWeek({ days: [WEEK[0]] });
-    expect(container.querySelectorAll(".slot")).toHaveLength(24);
+    expect(container.querySelectorAll(`.${weekStyles.slot}`)).toHaveLength(24);
     // 00:00-08:00 and 18:00-24:00
-    expect(container.querySelectorAll(".offHours")).toHaveLength(14);
+    expect(container.querySelectorAll(`.${weekStyles.offHours}`)).toHaveLength(
+      14,
+    );
   });
 
   it("follows a different working day from configuration", () => {
     mockConfig({ calendar: { day_start_hour: 6, day_end_hour: 22 } });
     const { container } = renderWeek({ days: [WEEK[0]] });
-    expect(container.querySelectorAll(".offHours")).toHaveLength(8);
+    expect(container.querySelectorAll(`.${weekStyles.offHours}`)).toHaveLength(
+      8,
+    );
   });
 
   it("places a meeting by its wall-clock time and duration", () => {
@@ -173,7 +180,7 @@ describe("WeekView", () => {
         meeting(new Date(2026, 7, 17, 9, 0), new Date(2026, 7, 17, 10, 30)),
       ],
     });
-    const chip = container.querySelector<HTMLElement>(".block")!;
+    const chip = container.querySelector<HTMLElement>(`.${chipStyles.block}`)!;
     expect(chip.style.insetBlockStart).toBe(`${(540 / 1440) * 100}%`);
     expect(chip.style.blockSize).toBe(`${(90 / 1440) * 100}%`);
     expect(chip.style.inlineSize).toBe("100%");
@@ -195,14 +202,18 @@ describe("WeekView", () => {
         ),
       ],
     });
-    const chips = container.querySelectorAll<HTMLElement>(".block");
+    const chips = container.querySelectorAll<HTMLElement>(
+      `.${chipStyles.block}`,
+    );
     expect(chips[0].style.inlineSize).toBe("50%");
     expect(chips[1].style.insetInlineStart).toBe("50%");
   });
 
   it("offers no way to book a slot without permission", () => {
     const { container } = renderWeek({ days: [WEEK[0]] });
-    expect(container.querySelectorAll(".slotButton")).toHaveLength(0);
+    expect(
+      container.querySelectorAll(`.${weekStyles.slotButton}`),
+    ).toHaveLength(0);
     expect(screen.queryByLabelText(/^Schedule on/)).not.toBeInTheDocument();
   });
 
@@ -213,7 +224,9 @@ describe("WeekView", () => {
       canSchedule: true,
       onSelectSlot,
     });
-    expect(container.querySelectorAll(".slotButton")).toHaveLength(24);
+    expect(
+      container.querySelectorAll(`.${weekStyles.slotButton}`),
+    ).toHaveLength(24);
 
     await userEvent.click(
       screen.getByLabelText(`Schedule on ${formatDay(i18n.language, WEEK[0])}`),
@@ -296,7 +309,9 @@ describe("WeekView", () => {
       onSelectSlot,
     });
     measureColumns(container);
-    const slot = container.querySelectorAll<HTMLElement>(".slotButton")[10];
+    const slot = container.querySelectorAll<HTMLElement>(
+      `.${weekStyles.slotButton}`,
+    )[10];
     act(() => {
       fireEvent(slot, pointer("pointerdown", 630));
       // A pixel of shake is not a drag.
@@ -318,7 +333,9 @@ describe("WeekView", () => {
       onSelectSlot,
     });
     drag(container, 630, 690);
-    fireEvent.click(container.querySelectorAll(".slotButton")[11]);
+    fireEvent.click(
+      container.querySelectorAll(`.${weekStyles.slotButton}`)[11],
+    );
     expect(onSelectSlot).toHaveBeenCalledTimes(1);
   });
 
@@ -331,7 +348,9 @@ describe("WeekView", () => {
     });
     drag(container, 630, 690, { pointerType: "touch" });
     expect(onSelectSlot).not.toHaveBeenCalled();
-    expect(container.querySelector(".dragBlock")).not.toBeInTheDocument();
+    expect(
+      container.querySelector(`.${weekStyles.dragBlock}`),
+    ).not.toBeInTheDocument();
   });
 
   it("does not start a drag on a meeting already in the grid", () => {
@@ -345,7 +364,9 @@ describe("WeekView", () => {
       ],
     });
     measureColumns(container);
-    const column = container.querySelector<HTMLElement>(".column")!;
+    const column = container.querySelector<HTMLElement>(
+      `.${weekStyles.column}`,
+    )!;
     act(() => {
       const chip = screen.getByText("Meeting !a:example.org");
       fireEvent(chip, pointer("pointerdown", 630));
@@ -377,38 +398,50 @@ describe("WeekView", () => {
   it("shows the start and the running length while dragging", () => {
     const { container } = renderWeek({ days: [WEEK[0]], canSchedule: true });
     measureColumns(container);
-    const column = container.querySelector<HTMLElement>(".column")!;
-    const slot = container.querySelectorAll<HTMLElement>(".slotButton")[10];
+    const column = container.querySelector<HTMLElement>(
+      `.${weekStyles.column}`,
+    )!;
+    const slot = container.querySelectorAll<HTMLElement>(
+      `.${weekStyles.slotButton}`,
+    )[10];
 
     act(() => {
       fireEvent(slot, pointer("pointerdown", 630));
       fireEvent(column, pointer("pointermove", 690));
     });
-    expect(container.querySelector(".dragBlock")).toHaveTextContent(
-      "10:30 · 1 h",
-    );
+    expect(
+      container.querySelector(`.${weekStyles.dragBlock}`),
+    ).toHaveTextContent("10:30 · 1 h");
 
     act(() => void fireEvent(column, pointer("pointermove", 735)));
-    expect(container.querySelector(".dragBlock")).toHaveTextContent(
-      "10:30 · 1 h 45 min",
-    );
+    expect(
+      container.querySelector(`.${weekStyles.dragBlock}`),
+    ).toHaveTextContent("10:30 · 1 h 45 min");
 
     act(() => void fireEvent(column, pointer("pointerup", 735)));
-    expect(container.querySelector(".dragBlock")).not.toBeInTheDocument();
+    expect(
+      container.querySelector(`.${weekStyles.dragBlock}`),
+    ).not.toBeInTheDocument();
   });
 
   it("draws the block over the minutes it covers", () => {
     const { container } = renderWeek({ days: [WEEK[0]], canSchedule: true });
     measureColumns(container);
-    const column = container.querySelector<HTMLElement>(".column")!;
+    const column = container.querySelector<HTMLElement>(
+      `.${weekStyles.column}`,
+    )!;
     act(() => {
       fireEvent(
-        container.querySelectorAll<HTMLElement>(".slotButton")[10],
+        container.querySelectorAll<HTMLElement>(
+          `.${weekStyles.slotButton}`,
+        )[10],
         pointer("pointerdown", 630),
       );
       fireEvent(column, pointer("pointermove", 690));
     });
-    const block = container.querySelector<HTMLElement>(".dragBlock")!;
+    const block = container.querySelector<HTMLElement>(
+      `.${weekStyles.dragBlock}`,
+    )!;
     expect(block.style.transform).toBe("translateY(630px)");
     expect(block.style.blockSize).toBe("60px");
   });
@@ -421,16 +454,22 @@ describe("WeekView", () => {
       onSelectSlot,
     });
     measureColumns(container);
-    const column = container.querySelector<HTMLElement>(".column")!;
+    const column = container.querySelector<HTMLElement>(
+      `.${weekStyles.column}`,
+    )!;
     act(() => {
       fireEvent(
-        container.querySelectorAll<HTMLElement>(".slotButton")[10],
+        container.querySelectorAll<HTMLElement>(
+          `.${weekStyles.slotButton}`,
+        )[10],
         pointer("pointerdown", 630),
       );
       fireEvent(column, pointer("pointermove", 690));
     });
     act(() => void fireEvent.keyDown(window, { key: "Escape" }));
-    expect(container.querySelector(".dragBlock")).not.toBeInTheDocument();
+    expect(
+      container.querySelector(`.${weekStyles.dragBlock}`),
+    ).not.toBeInTheDocument();
 
     act(() => void fireEvent(column, pointer("pointerup", 690)));
     expect(onSelectSlot).not.toHaveBeenCalled();
@@ -480,7 +519,9 @@ describe("WeekView", () => {
       onSelectSlot,
     });
     measureColumns(container);
-    const column = container.querySelector<HTMLElement>(".column")!;
+    const column = container.querySelector<HTMLElement>(
+      `.${weekStyles.column}`,
+    )!;
     act(() => {
       fireEvent(column, pointer("pointerdown", 630));
       fireEvent(column, pointer("pointermove", 690));

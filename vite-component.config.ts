@@ -1,0 +1,154 @@
+/*
+Copyright 2026 Element Creations Ltd.
+
+SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
+Please see LICENSE in the repository root for full details.
+*/
+
+import { defineConfig } from "vite";
+import { posix } from "node:path";
+
+import { vitePluginsConfig } from "./vite.config.ts";
+import { scopeStylesToRoot } from "./component/build/scopeStylesToRoot.ts";
+
+// Config for Element Call as a React component, to be imported by an
+// application embedding it rather than served as a page of its own.
+//
+// Deliberately not built on top of the full app's config, which exists to
+// produce a page and brings an HTML entry point along with it.
+export default defineConfig(({ mode }) => {
+  const base = vitePluginsConfig({ mode, html: false });
+  return {
+    ...base,
+    resolve: {
+      ...base.resolve,
+      alias: {
+        ...base.resolve?.alias,
+        // react-i18next depends on the CommonJS `use-sync-external-store/shim`, whose
+        // `require("react")` cannot be bundled against an external React: rolldown leaves a
+        // `require` shim that throws in the browser. React 18+ provides `useSyncExternalStore`
+        // itself, so point the shim at React.
+        "use-sync-external-store/shim": "react",
+      },
+    },
+    // A library has no public directory to serve. Without this the build copies
+    // whatever is in `public` — including the developer's own config.json, which
+    // is not in the repository — into the output we would publish.
+    publicDir: false,
+    // A library does not know where it will be served from, so every file it
+    // emits beside itself — the sounds, the pictures, MediaPipe's runtime — is
+    // referenced relative to the module's own URL. (A library build inlines
+    // each asset as a data URL unless its import says `no-inline`, so the
+    // imports do.)
+    base: "./",
+    experimental: {
+      // Relative to the chunk that references it, wherever that chunk lands,
+      // and spelled `./assets/…` rather than `assets/…`: a host's bundler reads
+      // a bare name as a package to look up.
+      renderBuiltUrl: (filename, { hostId, hostType }) => {
+        if (hostType !== "js") return { relative: true };
+        const relative = posix.relative(posix.dirname(hostId), filename);
+        const specifier = relative.startsWith(".") ? relative : `./${relative}`;
+        return {
+          runtime: `new URL(${JSON.stringify(specifier)}, import.meta.url).href`,
+        };
+      },
+    },
+    // A host's document is not ours to style: everything in the stylesheet is
+    // confined to the element Element Call is mounted in
+    css: { postcss: { plugins: [scopeStylesToRoot()] } },
+    build: {
+      // Into the package directory, so that `component/package.json` describes
+      // what sits next to it and the directory can be installed as a package
+      // (see its `files` and `exports`).
+      outDir: "component/dist",
+      minify: mode === "production",
+      sourcemap: true,
+      // One stylesheet rather than one per chunk, so a host has a single file to
+      // include
+      cssCodeSplit: false,
+      lib: {
+        formats: ["es" as const],
+        entry: {
+          // The component
+          "element-call": "./component/index.tsx",
+          // What a host needs to talk about it, without it (see component/api.ts).
+          // Built as an entry point of its own so that importing it does not
+          // load the component: the bundler gives it a chunk that reaches only
+          // what it imports.
+          api: "./component/api.ts",
+        },
+        fileName: (_format, entryName) => `${entryName}.js`,
+        // The one stylesheet (see cssCodeSplit) keeps the name it had when the
+        // component was the only entry
+        cssFileName: "element-call",
+      },
+      rollupOptions: {
+        output: {
+          // Hashed, as the app's are, so that a file a host serves as it is
+          // stays correct across versions of the package. Not the stylesheet,
+          // which the package exports by name (see `cssFileName`).
+          assetFileNames: ({ names }) =>
+            names.some((name) => name.endsWith(".css"))
+              ? "[name][extname]"
+              : "assets/[name]-[hash][extname]",
+        },
+        // The host already has these, and a second copy of any of them does not
+        // merely bloat the bundle: React would hold two sets of hooks, the
+        // Matrix client would run two sync loops, and a second Compound would
+        // bring a second stylesheet with class names of its own — so that what
+        // it floats into the host's body, tooltips and menus, would match the
+        // host's Compound stylesheet only when the two happened to be the same
+        // version.
+        //
+        // Every subpath has to be named. Element Call reaches most of the Matrix
+        // SDK as `matrix-js-sdk/lib/…`, and a bare "matrix-js-sdk" would not
+        // catch those — while the pattern and callback forms of this option are
+        // silently ignored by the bundler, so they cannot be used to cover them.
+        // `pnpm lint:externals` reads this list and fails if the source imports
+        // one of these packages by a path it does not name; a few entries below
+        // are there only because the standalone app imports them, which costs
+        // nothing.
+        external: [
+          "react",
+          "react/jsx-runtime",
+          // Emitted by the React Compiler for every compiled component; part of React, so it must be
+          // the host's copy too (bundled, its CommonJS `require("react")` throws in the browser).
+          "react/compiler-runtime",
+          "react-dom",
+          "react-dom/client",
+          "matrix-js-sdk",
+          "matrix-js-sdk/lib/@types/event",
+          "matrix-js-sdk/lib/browser-index",
+          "matrix-js-sdk/lib/client",
+          "matrix-js-sdk/lib/crypto-api",
+          "matrix-js-sdk/lib/indexeddb-worker",
+          "matrix-js-sdk/lib/logger",
+          "matrix-js-sdk/lib/matrix",
+          "matrix-js-sdk/lib/matrixrtc",
+          "matrix-js-sdk/lib/matrixrtc/EncryptionManager",
+          "matrix-js-sdk/lib/matrixrtc/IKeyTransport",
+          "matrix-js-sdk/lib/matrixrtc/IMembershipManager",
+          "matrix-js-sdk/lib/models/event",
+          "matrix-js-sdk/lib/models/relations-container",
+          "matrix-js-sdk/lib/models/room",
+          "matrix-js-sdk/lib/models/room-state",
+          "matrix-js-sdk/lib/models/typed-event-emitter",
+          "matrix-js-sdk/lib/randomstring",
+          "matrix-js-sdk/lib/sync",
+          "matrix-js-sdk/lib/types",
+          "matrix-js-sdk/lib/utils",
+          "@vector-im/compound-web",
+          "@vector-im/compound-design-tokens/assets/web/icons",
+          // Imported by the standalone app's home and scheduling views only.
+          "@vector-im/compound-design-tokens/assets/web/icons/check",
+          "@vector-im/compound-design-tokens/assets/web/icons/check-circle-solid",
+          "@vector-im/compound-design-tokens/assets/web/icons/chevron-down",
+          "@vector-im/compound-design-tokens/assets/web/icons/chevron-right",
+          "@vector-im/compound-design-tokens/assets/web/icons/plus",
+          "@vector-im/compound-design-tokens/assets/web/icons/video-call",
+        ],
+      },
+    },
+  };
+});

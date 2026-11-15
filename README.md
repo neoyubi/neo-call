@@ -191,7 +191,7 @@ above have the same meaning here as in the room service.
 ### Running the service tests
 
 ```sh
-yarn test:services
+pnpm test:services
 ```
 
 Node's own test runner over `services/**/*.test.mjs`. No network, no

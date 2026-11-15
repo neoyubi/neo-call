@@ -19,6 +19,7 @@ async function setupTwoUserSpaCall(
   browser: Browser,
   page: Page,
   browserName: string,
+  opts: { disableGuestLeaveDelegation?: boolean } = {},
 ): Promise<{ guestPage: Page }> {
   test.skip(
     browserName === "firefox",
@@ -28,7 +29,7 @@ async function setupTwoUserSpaCall(
   await page.goto("/");
 
   let androlHasSentStickyEvent = false;
-
+  const androlResolver = Promise.withResolvers<void>();
   await interceptEventSend(
     page,
     // This room is not encrypted, so the event is sent in clear
@@ -36,6 +37,7 @@ async function setupTwoUserSpaCall(
     (req) => {
       androlHasSentStickyEvent =
         androlHasSentStickyEvent || isStickySend(req.url());
+      androlResolver.resolve();
     },
   );
 
@@ -51,8 +53,12 @@ async function setupTwoUserSpaCall(
 
   await guestPage.goto("/");
 
+  if (opts.disableGuestLeaveDelegation)
+    await SpaHelpers.disableLeaveDelegation(guestPage);
+
   let pevaraHasSentStickyEvent = false;
 
+  const pevaraResolver = Promise.withResolvers<void>();
   await interceptEventSend(
     guestPage,
     // This room is not encrypted, so the event is sent in clear
@@ -60,6 +66,7 @@ async function setupTwoUserSpaCall(
     (req) => {
       pevaraHasSentStickyEvent =
         pevaraHasSentStickyEvent || isStickySend(req.url());
+      pevaraResolver.resolve();
     },
   );
 
@@ -70,7 +77,9 @@ async function setupTwoUserSpaCall(
     "2_0",
   );
   // Assert both sides have sent sticky membership events
+  await androlResolver.promise;
   expect(androlHasSentStickyEvent).toEqual(true);
+  await pevaraResolver.promise;
   expect(pevaraHasSentStickyEvent).toEqual(true);
 
   return { guestPage };
@@ -97,7 +106,13 @@ test("One to One rejoin after improper leave does not crash EC", async ({
   page,
   browserName,
 }) => {
-  const { guestPage } = await setupTwoUserSpaCall(browser, page, browserName);
+  // With delegation, the backend sends the guest's delayed leave event within
+  // moments of the improper leave, so the stale membership this test needs
+  // would be cleaned up before the rejoin. Keep the guest's leave
+  // client-managed so the stale membership lingers.
+  const { guestPage } = await setupTwoUserSpaCall(browser, page, browserName, {
+    disableGuestLeaveDelegation: true,
+  });
 
   await SpaHelpers.expectVideoTilesCount(page, 2);
   await SpaHelpers.expectVideoTilesCount(guestPage, 2);
@@ -110,8 +125,12 @@ test("One to One rejoin after improper leave does not crash EC", async ({
   await guestPage.getByTestId("lobby_joinCall").click();
 
   // We cannot use the `expectVideoTilesCount` helper here since one of them is expected to show waiting for media
-  await expect(page.getByTestId("videoTile")).toHaveCount(3);
-  await expect(guestPage.getByTestId("videoTile")).toHaveCount(2);
+  await expect(page.getByTestId("videoTile")).toHaveCount(3, {
+    timeout: 10000,
+  });
+  await expect(guestPage.getByTestId("videoTile")).toHaveCount(2, {
+    timeout: 10000,
+  });
 });
 
 function isStickySend(url: string): boolean {

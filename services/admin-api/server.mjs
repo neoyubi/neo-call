@@ -65,7 +65,9 @@ const MEETING_DESCRIPTION_TEMPLATE =
 // Substitute {{placeholder}} values. An unknown placeholder renders empty, so
 // a template is never shown to a reader with its own markup in it.
 function renderTemplate(template, values) {
-  return template.replace(/\{\{(\w+)\}\}/g, (_, key) => values[key] ?? "").trim();
+  return template
+    .replace(/\{\{(\w+)\}\}/g, (_, key) => values[key] ?? "")
+    .trim();
 }
 
 // IANA zone recorded on a meeting whose caller did not supply one. It is what
@@ -238,7 +240,11 @@ export function getCorsHeaders(origin) {
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Max-Age": "86400",
   };
-  if (origin && ALLOWED_ORIGINS.length > 0 && ALLOWED_ORIGINS.includes(origin)) {
+  if (
+    origin &&
+    ALLOWED_ORIGINS.length > 0 &&
+    ALLOWED_ORIGINS.includes(origin)
+  ) {
     headers["Access-Control-Allow-Origin"] = origin;
   }
   return headers;
@@ -396,7 +402,8 @@ export async function createMeetingRoom(body) {
     return {
       status: 400,
       body: {
-        error: "Missing required fields: booking_id, room_name, scheduled_start, scheduled_end",
+        error:
+          "Missing required fields: booking_id, room_name, scheduled_start, scheduled_end",
       },
     };
   }
@@ -548,7 +555,9 @@ export async function createMeetingRoom(body) {
     prospectEmail: prospect_email,
   });
 
-  console.log(`Created room ${roomId} (${roomAlias}) for booking ${booking_id}`);
+  console.log(
+    `Created room ${roomId} (${roomAlias}) for booking ${booking_id}`,
+  );
 
   return {
     status: 201,
@@ -584,12 +593,15 @@ export async function updateMeetingRoom(roomId, body) {
 
   // Merge: request value wins when present, otherwise keep the stored value.
   const merge = (incoming, key, fallback = "") =>
-    incoming !== undefined ? incoming : current[key] ?? fallback;
+    incoming !== undefined ? incoming : (current[key] ?? fallback);
 
-  const newStart = scheduled_start !== undefined ? scheduled_start : current.scheduled_start;
-  const newEnd = scheduled_end !== undefined ? scheduled_end : current.scheduled_end;
+  const newStart =
+    scheduled_start !== undefined ? scheduled_start : current.scheduled_start;
+  const newEnd =
+    scheduled_end !== undefined ? scheduled_end : current.scheduled_end;
   const startChanged =
-    scheduled_start !== undefined && scheduled_start !== current.scheduled_start;
+    scheduled_start !== undefined &&
+    scheduled_start !== current.scheduled_start;
 
   const reminderMinutes =
     reminder_minutes !== undefined
@@ -641,7 +653,9 @@ export async function updateMeetingRoom(roomId, body) {
   const icsChanged = ICS_AFFECTING_FIELDS.some(
     (field) => (newState[field] ?? "") !== (current[field] ?? ""),
   );
-  const priorSequence = Number.isInteger(current.sequence) ? current.sequence : 0;
+  const priorSequence = Number.isInteger(current.sequence)
+    ? current.sequence
+    : 0;
   newState.sequence = icsChanged ? priorSequence + 1 : priorSequence;
 
   // Carry reminder_sent forward, but clear it when the start time moved so the
@@ -776,7 +790,10 @@ export async function deleteMeetingRoom(roomId) {
       );
 
       console.log(`Gracefully cleaned up room ${roomId}`);
-      return { status: 200, body: { success: true, room_id: roomId, method: "graceful" } };
+      return {
+        status: 200,
+        body: { success: true, room_id: roomId, method: "graceful" },
+      };
     }
 
     console.error("Room deletion failed:", result.data);
@@ -790,7 +807,10 @@ export async function deleteMeetingRoom(roomId) {
   }
 
   console.log(`Purged room ${roomId}`);
-  return { status: 200, body: { success: true, room_id: roomId, method: "purge" } };
+  return {
+    status: 200,
+    body: { success: true, room_id: roomId, method: "purge" },
+  };
 }
 
 // --- Routing ---

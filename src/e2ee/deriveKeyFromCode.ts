@@ -86,7 +86,7 @@ export function fromDisplayMaterial(
   const displayIndex = charToIndex(displayMaterial);
   const offset = timeSlotOffset(timeSlot);
   const masterIndex =
-    ((displayIndex - offset) % KEY_MATERIAL_SPACE + KEY_MATERIAL_SPACE) %
+    (((displayIndex - offset) % KEY_MATERIAL_SPACE) + KEY_MATERIAL_SPACE) %
     KEY_MATERIAL_SPACE;
   return indexToChars(masterIndex, KEY_MATERIAL_LENGTH);
 }
@@ -173,8 +173,5 @@ export async function deriveSharedKey(
   for (const byte of bytes) {
     binary += String.fromCharCode(byte);
   }
-  return btoa(binary)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=/g, "");
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }

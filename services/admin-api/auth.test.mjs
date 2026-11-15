@@ -127,7 +127,10 @@ describe("the scheduler credential", () => {
       member: { status: 403, data: { errcode: "M_FORBIDDEN" } },
     });
 
-    const result = await authorizeRequest(request(`Bearer ${USER_TOKEN}`), env());
+    const result = await authorizeRequest(
+      request(`Bearer ${USER_TOKEN}`),
+      env(),
+    );
 
     assert.equal(result.ok, false);
     assert.equal(result.status, 503);

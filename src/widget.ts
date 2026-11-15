@@ -21,6 +21,7 @@ import type { IWidgetApiRequest } from "matrix-widget-api";
 import { LazyEventEmitter } from "./LazyEventEmitter";
 import { getUrlParams } from "./UrlParams";
 import { Config } from "./config/Config";
+import { seedSettingsFromConfig } from "./settings/settings";
 import { ElementCallReactionEventType } from "./reactions";
 
 // Subset of the actions in element-web
@@ -57,18 +58,21 @@ export interface WidgetHelpers {
 }
 
 /**
- * A point of access to the widget API, if the app is running as a widget. This
- * is initialized with `initializeWidget`. This should happen at the top level because the widget messaging
- * needs to be set up ASAP on load to ensure it doesn't miss any requests.
- */
-export let widget: WidgetHelpers | null;
-
-/**
- * Should be called as soon as possible on app start. (In the initilizer before react)
+ * Connects to the widget API, if Element Call is running as a widget.
+ *
+ * Should be called as soon as possible on app start (in the initializer, before
+ * React), because the widget messaging needs to be set up ASAP on load to
+ * ensure it doesn't miss any requests.
+ *
+ * @returns A point of access to the widget API, or null if Element Call is not
+ *   running as a widget.
  */
 // this needs to be a seperate call and cannot be done on import to allow us to spy on methods in here before
 // execution.
-export const initializeWidget = (): void => {
+export const initializeWidget = (
+  rtcApplication: string = "m.call",
+  sendRoomEvents = false,
+): WidgetHelpers | null => {
   try {
     const {
       widgetId,
@@ -90,6 +94,7 @@ export const initializeWidget = (): void => {
       logger.info("Widget API is available");
       const api = new WidgetApi(widgetId, parentOrigin);
       api.requestCapability(MatrixCapabilities.AlwaysOnScreen);
+      api.requestCapability(MatrixCapabilities.MSC4039DownloadFile);
 
       // Set up the lazy action emitter, but only for select actions that we
       // intend for the app to handle
@@ -116,6 +121,9 @@ export const initializeWidget = (): void => {
         EventType.CallNotify, // Sent as a deprecated fallback
         EventType.RTCNotification,
       ];
+      if (sendRoomEvents) {
+        sendEvent.push(EventType.RoomMessage);
+      }
       const sendRecvEvent = [
         "org.matrix.rageshake_request",
         EventType.CallEncryptionKeysPrefix,
@@ -128,8 +136,8 @@ export const initializeWidget = (): void => {
 
       const sendState = [
         userId, // Legacy call membership events
-        `_${userId}_${deviceId}_m.call`, // Session membership events
-        `${userId}_${deviceId}_m.call`, // The above with no leading underscore, for room versions whose auth rules allow it
+        `_${userId}_${deviceId}_${rtcApplication}`, // Session membership events
+        `${userId}_${deviceId}_${rtcApplication}`, // The above with no leading underscore, for room versions whose auth rules allow it
       ].map((stateKey) => ({
         eventType: EventType.GroupCallMemberPrefix,
         stateKey,
@@ -166,6 +174,9 @@ export const initializeWidget = (): void => {
           sendToDevice: sendRecvToDevice,
           receiveToDevice: sendRecvToDevice,
           turnServers: false,
+          rtcTransports: true,
+          rtcLivekitGetToken: true,
+          rtcLivekitDelegateDelayedLeave: true,
           sendDelayedEvents: true,
           updateDelayedEvents: true,
           sendSticky: true,
@@ -188,18 +199,19 @@ export const initializeWidget = (): void => {
         // Wait for the config file to be ready (we load very early on so it might not
         // be otherwise)
         await Config.init();
-        await client.startClient({ clientWellKnownPollPeriod: 60 * 10 });
+        seedSettingsFromConfig(Config.get().media_quality);
+        await client.startClient();
         return client;
       };
 
-      widget = { api, lazyActions, client: clientPromise() };
+      return { api, lazyActions, client: clientPromise() };
     } else {
       if (import.meta.env.MODE !== "test")
         logger.info("No widget API available");
-      widget = null;
+      return null;
     }
   } catch (e) {
     logger.warn("Continuing without the widget API", e);
-    widget = null;
+    return null;
   }
 };

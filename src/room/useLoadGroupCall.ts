@@ -35,7 +35,7 @@ import {
   LockSolidIcon,
 } from "@vector-im/compound-design-tokens/assets/web/icons";
 
-import { widget } from "../widget";
+import { useUrlParams } from "../UrlParams";
 
 export type GroupCallLoaded = {
   kind: "loaded";
@@ -133,6 +133,7 @@ export const useLoadGroupCall = (
   const [state, setState] = useState<GroupCallStatus>({ kind: "loading" });
   const activeRoom = useRef<Room | undefined>(undefined);
   const { t } = useTranslation();
+  const { isWidget } = useUrlParams();
 
   const bannedError = useCallback(
     (): CallTerminatedMessage =>
@@ -244,7 +245,7 @@ export const useLoadGroupCall = (
         // room already joined so we are done here already.
         return room!;
       }
-      if (widget)
+      if (isWidget)
         // in widget mode we never should reach this point. (getRoom should return the room.)
         throw new Error(
           "Room not found. The widget-api did not pass over the relevant room events/information.",
@@ -275,7 +276,7 @@ export const useLoadGroupCall = (
           );
         }
         if (
-          roomSummary === undefined ||
+          roomSummary?.join_rule === undefined ||
           roomSummary.join_rule === JoinRule.Public
         ) {
           room = await client.joinRoom(roomId, {
@@ -299,11 +300,8 @@ export const useLoadGroupCall = (
           );
           setState({ kind: "canKnock", roomSummary: _roomSummary, knock });
           await userPressedAskToJoinPromise;
-          room = await getRoomByKnocking(
-            roomSummary.room_id,
-            viaServers,
-            () =>
-              setState({ kind: "waitForInvite", roomSummary: _roomSummary }),
+          room = await getRoomByKnocking(roomSummary.room_id, viaServers, () =>
+            setState({ kind: "waitForInvite", roomSummary: _roomSummary }),
           );
         } else if (roomSummary.join_rule === JoinRule.Invite) {
           throw roomClosedError();
@@ -369,6 +367,7 @@ export const useLoadGroupCall = (
   }, [
     bannedError,
     client,
+    isWidget,
     knockRejectError,
     removeNoticeError,
     roomClosedError,

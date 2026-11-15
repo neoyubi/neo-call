@@ -1,5 +1,10 @@
 import { act, renderHook } from "@testing-library/react";
-import { type MatrixClient, type Room, RoomEvent } from "matrix-js-sdk";
+import {
+  type MatrixClient,
+  type Room,
+  RoomEvent,
+  RoomStateEvent,
+} from "matrix-js-sdk";
 import EventEmitter from "events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -262,7 +267,7 @@ describe("useScheduledMeetings", () => {
       }),
     );
     act(() => {
-      emitter.emit(RoomEvent.CurrentStateUpdated);
+      emitter.emit(RoomStateEvent.Events);
     });
 
     expect(result.current.meetings).not.toBe(before);
@@ -279,7 +284,7 @@ describe("useScheduledMeetings", () => {
       expect.any(Function),
     );
     expect(off).toHaveBeenCalledWith(
-      RoomEvent.CurrentStateUpdated,
+      RoomStateEvent.Events,
       expect.any(Function),
     );
   });
@@ -302,7 +307,7 @@ describe("rescheduleMeeting", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe(`${ADMIN_API}/api/admin/rooms/!a%3Aexample.org`);
     expect(init?.method).toBe("PUT");
-    expect((init?.headers as Record<string, string>).Authorization).toBe(
+    expect((init!.headers as Record<string, string>).Authorization).toBe(
       "Bearer syt_token",
     );
     expect(Object.keys(JSON.parse(init?.body as string))).toEqual([

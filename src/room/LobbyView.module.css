@@ -45,13 +45,13 @@ Please see LICENSE in the repository root for full details.
   outline-offset: var(--cpd-space-0-5x);
 }
 
-@media (max-width: 500px) {
+@container element-call (max-width: 500px) {
   .join {
     width: 100%;
   }
 }
 
-@media (min-height: 650px) {
+@container element-call (min-height: 650px) {
   .content {
     gap: var(--cpd-space-10x);
   }

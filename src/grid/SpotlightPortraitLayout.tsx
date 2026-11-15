@@ -6,7 +6,6 @@ Please see LICENSE in the repository root for full details.
 */
 
 import { type ReactNode, type CSSProperties } from "react";
-import { useObservableEagerState } from "observable-hooks";
 import classNames from "classnames";
 
 import { type CallLayout, arrangeTiles } from "./CallLayout";
@@ -29,7 +28,7 @@ interface GridCSSProperties extends CSSProperties {
 export const makeSpotlightPortraitLayout: CallLayout<
   SpotlightPortraitLayoutModel
 > = ({ minBounds$ }) => ({
-  scrollingOnTop: false,
+  foreground: "fixed",
 
   fixed: function SpotlightPortraitLayoutFixed({
     ref,
@@ -44,7 +43,7 @@ export const makeSpotlightPortraitLayout: CallLayout<
           <Slot
             className={styles.slot}
             id="spotlight"
-            model={model.spotlight}
+            model={model.spotlight.vm}
           />
         </div>
       </div>
@@ -58,7 +57,7 @@ export const makeSpotlightPortraitLayout: CallLayout<
   }): ReactNode {
     useUpdateLayout();
     useVisibleTiles(model.setVisibleTiles);
-    const { width } = useObservableEagerState(minBounds$);
+    const { width } = useBehavior(minBounds$);
     const { gap, tileWidth, tileHeight } = arrangeTiles(
       width,
       // TODO: We pretend that the minimum height is the width, because the
@@ -66,7 +65,7 @@ export const makeSpotlightPortraitLayout: CallLayout<
       width,
       model.grid.length,
     );
-    const withIndicators = useBehavior(model.spotlight.media$).length > 1;
+    const withIndicators = useBehavior(model.spotlight.vm.media$).length > 1;
 
     return (
       <div

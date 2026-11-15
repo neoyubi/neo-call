@@ -10,7 +10,6 @@ import { PopOutIcon } from "@vector-im/compound-design-tokens/assets/web/icons";
 
 import type { FC, ReactNode } from "react";
 import { ErrorView } from "./ErrorView";
-import { widget } from "./widget.ts";
 import { productName } from "./branding";
 
 /**
@@ -33,11 +32,7 @@ const OpenElsewhere: FC = () => {
   const { t } = useTranslation();
 
   return (
-    <ErrorView
-      widget={widget}
-      Icon={PopOutIcon}
-      title={t("error.open_elsewhere")}
-    >
+    <ErrorView Icon={PopOutIcon} title={t("error.open_elsewhere")}>
       <p>
         {t("error.open_elsewhere_description", {
           brand: productName(),

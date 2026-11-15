@@ -12,6 +12,9 @@ backend/synapse_tmp_othersite/*
 backend/synapse_calldev/
 backend/calldev_homeserver.yaml
 /coverage
+
+# Transient agent scratch files
+/agent-workspace/
 config.json
 
 # Yarn
@@ -23,9 +26,14 @@ yarn-error.log
 !/.yarn/releases
 !/.yarn/sdks
 !/.yarn/versions
+# old yarn based linking
 /.links.yaml
 /.links.disabled.yaml
 /.links.temp-disabled.yaml
+# pnpm based linking
+/.links.cjs
+/.links.disabled.cjs
+/.links.temp-disabled.cjs
 
 # Local dev/deployment overrides
 CLAUDE.md
@@ -47,3 +55,12 @@ scripts/push.sh
 config/config.prod.json
 config/branding/
 Dockerfile.prod
+*storybook.log
+storybook-static
+
+# Nested checkout made by scripts/layered.sh
+/matrix-js-sdk/
+
+# Claude
+/.claude/*
+!/.claude/skills/

@@ -82,7 +82,9 @@ export async function putEvent({ uid, ics }) {
     });
   } catch (err) {
     throw new CalDavError(
-      err.name === "AbortError" ? "CalDAV request timed out" : "CalDAV request failed",
+      err.name === "AbortError"
+        ? "CalDAV request timed out"
+        : "CalDAV request failed",
       0,
     );
   }
@@ -108,7 +110,9 @@ export async function deleteEvent({ uid }) {
     });
   } catch (err) {
     throw new CalDavError(
-      err.name === "AbortError" ? "CalDAV request timed out" : "CalDAV request failed",
+      err.name === "AbortError"
+        ? "CalDAV request timed out"
+        : "CalDAV request failed",
       0,
     );
   }

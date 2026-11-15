@@ -16,6 +16,7 @@ import { Avatar as CompoundAvatar } from "@vector-im/compound-web";
 import { type MatrixClient } from "matrix-js-sdk";
 
 import { useClientState } from "./ClientContext";
+import { useHostBridge } from "./HostBridge";
 
 export enum Size {
   XS = "xs",
@@ -74,59 +75,65 @@ export const Avatar: FC<Props> = ({
   ...props
 }) => {
   const clientState = useClientState();
+  const hostBridge = useHostBridge();
 
   const sizePx = useMemo(
     () =>
       Object.values(Size).includes(size as Size)
-        ? sizes.get(size as Size)
+        ? sizes.get(size as Size)!
         : (size as number),
     [size],
   );
 
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
 
+  // In theory, a change in `clientState` or `sizePx` could run extra media
+  // downloads, but in practice they should be stable long before this code runs.
   useEffect(() => {
-    if (clientState?.state !== "valid") {
-      return;
-    }
-    const { authenticated, supportedFeatures } = clientState;
-    const client = authenticated?.client;
-
-    if (!client || !src || !sizePx || !supportedFeatures.thumbnails) {
+    if (!src) {
+      setAvatarUrl(undefined);
       return;
     }
 
-    const token = client.getAccessToken();
-    if (!token) {
-      return;
-    }
-    const resolveSrc = getAvatarUrl(client, src, sizePx);
-    if (!resolveSrc) {
+    let blob: Promise<Blob>;
+
+    if (hostBridge.downloadMedia) {
+      blob = hostBridge.downloadMedia(src);
+    } else if (
+      clientState?.state === "valid" &&
+      clientState.authenticated?.client &&
+      sizePx
+    ) {
+      blob = getAvatarFromServer(clientState.authenticated.client, src, sizePx);
+    } else {
       setAvatarUrl(undefined);
       return;
     }
 
     let objectUrl: string | undefined;
-    fetch(resolveSrc, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    })
-      .then(async (req) => req.blob())
+    let stale = false;
+    blob
       .then((blob) => {
+        if (stale) {
+          return;
+        }
         objectUrl = URL.createObjectURL(blob);
         setAvatarUrl(objectUrl);
       })
       .catch((ex) => {
+        if (stale) {
+          return;
+        }
         setAvatarUrl(undefined);
       });
 
     return (): void => {
+      stale = true;
       if (objectUrl) {
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [clientState, src, sizePx]);
+  }, [clientState, hostBridge, src, sizePx]);
 
   return (
     <CompoundAvatar
@@ -140,3 +147,29 @@ export const Avatar: FC<Props> = ({
     />
   );
 };
+
+async function getAvatarFromServer(
+  client: MatrixClient,
+  src: string,
+  sizePx: number,
+): Promise<Blob> {
+  const httpSrc = getAvatarUrl(client, src, sizePx);
+  if (!httpSrc) {
+    throw new Error("Failed to get http avatar URL");
+  }
+
+  const token = client.getAccessToken();
+  if (!token) {
+    throw new Error("Failed to get access token");
+  }
+
+  const request = await fetch(httpSrc, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  const blob = await request.blob();
+
+  return blob;
+}

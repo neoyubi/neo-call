@@ -6,6 +6,7 @@ Please see LICENSE in the repository root for full details.
 */
 
 import { merge } from "lodash-es";
+import { logger } from "matrix-js-sdk/lib/logger";
 
 import { getUrlParams } from "../UrlParams";
 import {
@@ -14,6 +15,11 @@ import {
   type ResolvedConfigOptions,
 } from "./ConfigOptions";
 import { isFailure } from "../utils/fetch";
+import { MatrixRTCMode } from "./ConfigOptions";
+
+const VALID_MATRIX_RTC_MODES: ReadonlySet<string> = new Set(
+  Object.values(MatrixRTCMode),
+);
 
 export class Config {
   private static internalInstance: Config | undefined;
@@ -24,6 +30,14 @@ export class Config {
     return this.internalInstance.config;
   }
 
+  /**
+   * Initializes the config by fetching `config.json`, locating it relative to
+   * the current page.
+   *
+   * Does nothing if the config has already been initialized, including by
+   * {@link Config.initWith}, so that the regular startup path can run unchanged
+   * when a component host has already supplied the config.
+   */
   public static async init(): Promise<void> {
     if (!Config.internalInstance?.initPromise) {
       const internalInstance = new Config();
@@ -44,11 +58,33 @@ export class Config {
 
       Config.internalInstance.initPromise = downloadConfig(fetchTarget).then(
         (config) => {
-          internalInstance.config = merge({}, DEFAULT_CONFIG, config);
+          internalInstance.config = resolveConfig(config);
         },
       );
     }
     return Config.internalInstance.initPromise;
+  }
+
+  /**
+   * Initializes the config from an object supplied by the application hosting
+   * the component, instead of fetching `config.json`.
+   *
+   * {@link Config.init} derives the location of `config.json` from
+   * `window.location`, which only makes sense while Element Call owns the page.
+   * As a component, the host owns the configuration and passes it in here.
+   *
+   * The config goes through the same validation and defaulting as a fetched
+   * one, so that a supplied config behaves identically to a fetched one.
+   *
+   * Replaces any config initialized earlier.
+   */
+  public static initWith(config: ConfigOptions): void {
+    const internalInstance = new Config();
+    internalInstance.config = resolveConfig(config);
+    // Mark initialization as already done, so that a later init() resolves
+    // immediately rather than fetching config.json over the top of this.
+    internalInstance.initPromise = Promise.resolve();
+    Config.internalInstance = internalInstance;
   }
 
   /**
@@ -59,8 +95,7 @@ export class Config {
    * It is supposed to only be used in tests. (It is executed in `vite.setup.js`)
    */
   public static initDefault(): void {
-    Config.internalInstance = new Config();
-    Config.internalInstance.config = { ...DEFAULT_CONFIG };
+    Config.initWith({});
   }
 
   // Convenience accessors
@@ -84,15 +119,47 @@ export class Config {
   private initPromise?: Promise<void>;
 }
 
-async function downloadConfig(fetchTarget: string): Promise<ConfigOptions> {
-  const response = await fetch(fetchTarget);
+/**
+ * Applies validation and the built-in defaults to a config, however it was
+ * obtained. Deep-merges onto a fresh object so that the result never shares
+ * nested state with {@link DEFAULT_CONFIG}.
+ */
+function resolveConfig(config: ConfigOptions): ResolvedConfigOptions {
+  return merge({}, DEFAULT_CONFIG, validateConfig(config));
+}
 
-  if (isFailure(response)) {
-    // Lack of a config isn't an error, we should just use the defaults.
-    // Also treat a blank config as no config, assuming the status code is 0, because we don't get 404s from file:
-    // URIs so this is the only way we can not fail if the file doesn't exist when loading from a file:// URI.
-    return DEFAULT_CONFIG;
+export function validateConfig(config: ConfigOptions): ConfigOptions {
+  const mode = config.matrix_rtc_mode;
+  if (mode !== undefined && !VALID_MATRIX_RTC_MODES.has(mode)) {
+    logger.warn(
+      `Ignoring invalid matrix_rtc_mode in config.json: ${String(mode)}`,
+    );
+    delete config.matrix_rtc_mode;
+  }
+  return config;
+}
+
+async function downloadConfig(fetchTarget: string): Promise<ConfigOptions> {
+  let response: Response;
+  try {
+    response = await fetch(fetchTarget);
+  } catch (e) {
+    // The embedded package ships no config.json, and some webviews (Element X
+    // iOS) reject the fetch of a missing local file rather than answering 404.
+    logger.info(`No config at ${fetchTarget}, using defaults`, e);
+    // resolveConfig merges in the defaults.
+    return {};
   }
 
-  return response.json();
+  if (isFailure(response)) {
+    // resolveConfig merges in the defaults.
+    return {};
+  }
+
+  try {
+    return await response.json();
+  } catch (e) {
+    logger.warn(`Config at ${fetchTarget} is not JSON, using defaults`, e);
+    return {};
+  }
 }

@@ -86,8 +86,8 @@ export const RoomAuthView: FC = () => {
                     href={Config.get().branding!.privacy_policy_url!}
                   >
                     Privacy Policy
-                  </ExternalLink>
-                  {" "}and the handling of your data as described therein.
+                  </ExternalLink>{" "}
+                  and the handling of your data as described therein.
                 </Trans>
               </Text>
             )}

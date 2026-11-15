@@ -6,28 +6,27 @@ Please see LICENSE in the repository root for full details.
 */
 
 import {
-  type CallMembership,
   type IRTCNotificationContent,
   type MatrixRTCSession,
   MatrixRTCSessionEvent,
+  RTC_CALL_INTENT_AUDIO,
+  type RTCCallIntent,
+  toStableCallIntent,
 } from "matrix-js-sdk/lib/matrixrtc";
 import {
-  combineLatest,
-  concat,
-  endWith,
   filter,
   fromEvent,
-  ignoreElements,
   map,
   merge,
   NEVER,
   type Observable,
   of,
   pairwise,
-  startWith,
   switchMap,
-  takeUntil,
   timer,
+  EMPTY,
+  race,
+  take,
 } from "rxjs";
 import {
   type EventTimelineSetHandlerMap,
@@ -35,18 +34,24 @@ import {
   type Room as MatrixRoom,
   RoomEvent,
 } from "matrix-js-sdk";
+import { logger as rootLogger } from "matrix-js-sdk/lib/logger";
 
-import { type Behavior } from "../Behavior";
-import { type Epoch, mapEpoch, type ObservableScope } from "../ObservableScope";
+import { type Behavior, type ObservableScope } from "@element-hq/matrixrtc-sdk";
 
 export type AutoLeaveReason = "allOthersLeft" | "timeout" | "decline";
-export type CallPickupState =
-  | "unknown"
-  | "ringing"
-  | "timeout"
-  | "decline"
-  | "success"
-  | null;
+
+export interface RingAttempt {
+  intent: RTCCallIntent;
+  /**
+   * The user ID of the recipient being rung.
+   */
+  recipient: string;
+  /**
+   * The eventual outcome of the ringing attempt. (Emits a single value.)
+   */
+  // TODO: Include a callback for attempting ringing again in case of a timeout
+  outcome$: Observable<"accept" | "decline" | "timeout">;
+}
 
 export type CallNotificationWrapper = {
   event_id: string;
@@ -75,7 +80,10 @@ export function createReceivedDecline$(
 
 export interface Props {
   scope: ObservableScope;
-  memberships$: Behavior<Epoch<CallMembership[]>>;
+  /** The user ids of the session's members, ours included. */
+  memberUserIds$: Behavior<string[]>;
+  /** The user ids of the room's members, ours included. */
+  roomMemberUserIds$: Behavior<string[]>;
   sentCallNotification$: Observable<CallNotificationWrapper | null>;
   receivedDecline$: Observable<
     Parameters<EventTimelineSetHandlerMap[RoomEvent.Timeline]>
@@ -84,132 +92,111 @@ export interface Props {
   localUser: { deviceId: string; userId: string };
 }
 
-/**
- * @returns two observables:
- * `callPickupState$` The current call pickup state of the call.
- *  - "unknown": The client has not yet sent the notification event. We don't know if it will because it first needs to send its own membership.
- *     Then we can conclude if we were the first one to join or not.
- *     This may also be set if we are disconnected.
- *  - "ringing": The call is ringing on other devices in this room (This client should give audiovisual feedback that this is happening).
- *  - "timeout": No-one picked up in the defined time this call should be ringing on others devices.
- *     The call failed. If desired this can be used as a trigger to exit the call.
- *  - "success": Someone else joined. The call is in a normal state. No audiovisual feedback.
- *  - null: EC is configured to never show any waiting for answer state.
- *
- * `autoLeave$` An observable that emits (null) when the call should be automatically left.
- *  - if options.autoLeaveWhenOthersLeft is set to true it emits when all others left.
- *  - if options.waitForCallPickup is set to true it emits if noone picked up the ring or if the ring got declined.
- *  - if options.autoLeaveWhenOthersLeft && options.waitForCallPickup is false it will never emit.
- *
- */
 export function createCallNotificationLifecycle$({
   scope,
-  memberships$,
+  memberUserIds$,
+  roomMemberUserIds$,
   sentCallNotification$,
   receivedDecline$,
   options,
   localUser,
 }: Props): {
-  callPickupState$: Behavior<CallPickupState>;
+  /**
+   * An observable of attempts to ring the remote participant's devices.
+   */
+  ringAttempts$: Observable<RingAttempt>;
+  /**
+   * An observable that emits when the call should be automatically left.
+   *  - if options.autoLeaveWhenOthersLeft is set to true it emits when all others left.
+   *  - if options.waitForCallPickup is set to true it emits if noone picked up the ring or if the ring got declined.
+   *  - if options.autoLeaveWhenOthersLeft && options.waitForCallPickup is false it will never emit.
+   */
   autoLeave$: Observable<AutoLeaveReason>;
 } {
-  const allOthersLeft$ = memberships$.pipe(
-    pairwise(),
-    filter(
-      ([{ value: prev }, { value: current }]) =>
-        current.every((m) => m.userId === localUser.userId) &&
-        prev.some((m) => m.userId !== localUser.userId),
-    ),
-    map(() => {}),
-  );
-
-  /**
-   * Whether some Matrix user other than ourself is joined to the call.
-   */
-  const someoneElseJoined$ = memberships$.pipe(
-    mapEpoch((ms) => ms.some((m) => m.userId !== localUser.userId)),
-  ) as Behavior<Epoch<boolean>>;
-
-  /**
-   * Whenever the RTC session tells us that it intends to ring the remote
-   * participant's devices, this emits an Observable tracking the current state of
-   * that ringing process.
-   */
-  // This is a behavior since we need to store the latest state for when we subscribe to this after `didSendCallNotification$`
-  // has already emitted but we still need the latest observable with a timeout timer that only gets created on after receiving `notificationEvent`.
-  // A behavior will emit the latest observable with the running timer to new subscribers.
-  // see also: callPickupState$ and in particular the line: `return this.ring$.pipe(mergeAll());` here we otherwise might get an EMPTY observable if
-  // `ring$` would not be a behavior.
-  const remoteRingState$: Behavior<"ringing" | "timeout" | "decline" | null> =
-    scope.behavior(
-      sentCallNotification$.pipe(
-        filter(
-          (notificationEventArgs: CallNotificationWrapper | null) =>
-            // only care about new events (legacy do not have decline pattern)
-            notificationEventArgs?.notification_type === "ring",
-        ),
-        map((e) => e as CallNotificationWrapper),
-        switchMap((notificationEvent) => {
-          const lifetimeMs = notificationEvent?.lifetime ?? 0;
-          return concat(
-            lifetimeMs === 0
-              ? // If no lifetime, skip the ring state
-                of(null)
-              : // Ring until lifetime ms have passed
-                timer(lifetimeMs).pipe(
-                  ignoreElements(),
-                  startWith("ringing" as const),
-                ),
-            // The notification lifetime has timed out, meaning ringing has likely
-            // stopped on all receiving clients.
-            of("timeout" as const),
-            // This makes sure we will not drop into the `endWith("decline" as const)` state
-            NEVER,
-          ).pipe(
-            takeUntil(
-              receivedDecline$.pipe(
-                filter(
-                  ([event]) =>
-                    event.getRelation()?.rel_type === "m.reference" &&
-                    event.getRelation()?.event_id ===
-                      notificationEvent.event_id &&
-                    event.getSender() !== localUser.userId &&
-                    callPickupState$.value !== "timeout",
-                ),
-              ),
-            ),
-            endWith("decline" as const),
-          );
-        }),
+  const logger = rootLogger.getChild("[CallNotificationLifecycle]");
+  let ringAttempts$: Observable<RingAttempt> = NEVER;
+  if (options.waitForCallPickup)
+    ringAttempts$ = sentCallNotification$.pipe(
+      filter(
+        (
+          notificationEvent: CallNotificationWrapper | null,
+        ): notificationEvent is CallNotificationWrapper =>
+          // only care about new events (legacy do not have decline pattern)
+          notificationEvent?.notification_type === "ring" &&
+          notificationEvent.lifetime > 0,
       ),
-      null,
+      switchMap((notificationEvent) => {
+        // We assume that there is only one other user in the room when ringing
+        // TODO: Respect io.element.functional_members
+        const recipient = roomMemberUserIds$.value.find(
+          (userId) => userId !== localUser.userId,
+        );
+        if (recipient === undefined) {
+          logger.warn("No recipient for notification event; not ringing.");
+          return EMPTY;
+        }
+
+        // Ringing times out after lifetime ms have passed
+        const timeout$ = timer(notificationEvent.lifetime).pipe(
+          map(() => "timeout" as const),
+        );
+        // Call is accepted when the recipient joins
+        const accept$ = memberUserIds$.pipe(
+          filter((userIds) => userIds.includes(recipient)),
+          map(() => "accept" as const),
+        );
+        // Call is declined when we receive a decline event
+        const decline$ = receivedDecline$.pipe(
+          filter(
+            ([event]) =>
+              event.getRelation()?.rel_type === "m.reference" &&
+              event.getRelation()?.event_id === notificationEvent.event_id &&
+              event.getSender() === recipient,
+          ),
+          map(() => "decline" as const),
+        );
+
+        return of({
+          // The notification still carries the legacy intent values
+          intent:
+            toStableCallIntent(notificationEvent["m.call.intent"]) ??
+            RTC_CALL_INTENT_AUDIO,
+          recipient,
+          outcome$: race(timeout$, accept$, decline$).pipe(
+            take(1),
+            // Make this observable 'hot' to avoid running multiple timers. This
+            // is not actually a resource leak since there will be at most one
+            // active ring attempt at any given time.
+            // eslint-disable-next-line element-call/no-observablescope-leak
+            scope.share,
+          ),
+        });
+      }),
+      scope.share,
     );
 
-  const callPickupState$ = scope.behavior(
-    options.waitForCallPickup === true
-      ? combineLatest(
-          [someoneElseJoined$, remoteRingState$],
-          (someoneElseJoined, ring) => {
-            if (someoneElseJoined.value === true) {
-              return "success" as const;
-            }
-            // Show the ringing state of the most recent ringing attempt.
-            // as long as we have not yet sent an RTC notification event or noone else joined,
-            // ring will be null -> callPickupState$ = unknown.
-            return ring ?? ("unknown" as const);
-          },
-        )
-      : NEVER,
-    null,
+  const allOthersLeft$ = memberUserIds$.pipe(
+    pairwise(),
+    filter(
+      ([prev, current]) =>
+        current.every((userId) => userId === localUser.userId) &&
+        prev.some((userId) => userId !== localUser.userId),
+    ),
+    map(() => {}),
   );
 
   const autoLeave$ = merge(
     options.autoLeaveWhenOthersLeft === true
       ? allOthersLeft$.pipe(map(() => "allOthersLeft" as const))
       : NEVER,
-    callPickupState$.pipe(
-      filter((state) => state === "timeout" || state === "decline"),
+    ringAttempts$.pipe(
+      switchMap(({ outcome$ }) =>
+        outcome$.pipe(
+          filter((outcome) => outcome === "timeout" || outcome === "decline"),
+        ),
+      ),
     ),
   );
-  return { autoLeave$, callPickupState$ };
+
+  return { ringAttempts$, autoLeave$ };
 }

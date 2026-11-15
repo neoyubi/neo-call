@@ -3,6 +3,7 @@ import {
   type MatrixClient,
   type RoomMember,
   EventType,
+  JoinRule,
 } from "matrix-js-sdk";
 import { useTranslation } from "react-i18next";
 import { Button, Text } from "@vector-im/compound-web";
@@ -51,16 +52,21 @@ export const KnockRequestsPanel: FC<Props> = ({
   const onCloseRoom = useCallback(() => {
     setClosing(true);
     // Reject all pending knocks, then change join rule to invite-only
-    const rejectAll = knockMembers.map((m) =>
+    const rejectAll = knockMembers.map(async (m) =>
       client.kick(roomId, m.userId).catch((e) => {
         logger.error("Failed to reject knock during room close", e);
       }),
     );
     Promise.all(rejectAll)
       .then(async () => {
-        await client.sendStateEvent(roomId, EventType.RoomJoinRules, {
-          join_rule: "invite",
-        }, "");
+        await client.sendStateEvent(
+          roomId,
+          EventType.RoomJoinRules,
+          {
+            join_rule: JoinRule.Invite,
+          },
+          "",
+        );
         logger.info("Room closed to new join requests");
         onDismiss();
       })
@@ -71,14 +77,10 @@ export const KnockRequestsPanel: FC<Props> = ({
   }, [client, roomId, knockMembers, onDismiss]);
 
   return (
-    <Modal
-      title={t("knock_requests.title")}
-      open={open}
-      onDismiss={onDismiss}
-    >
+    <Modal title={t("knock_requests.title")} open={open} onDismiss={onDismiss}>
       <div className={styles.list}>
         {knockMembers.length === 0 ? (
-          <Text size="sm" className={styles.empty}>
+          <Text size="md" className={styles.empty}>
             {t("knock_requests.empty")}
           </Text>
         ) : (
@@ -94,14 +96,12 @@ export const KnockRequestsPanel: FC<Props> = ({
       </div>
       <div className={styles.footer}>
         <Button
-          size="sm"
+          size="md"
           kind="destructive"
           onClick={onCloseRoom}
           disabled={closing}
         >
-          {closing
-            ? t("common.loading")
-            : t("knock_requests.close_room")}
+          {closing ? t("common.loading") : t("knock_requests.close_room")}
         </Button>
         <Text size="xs" className={styles.closeHint}>
           {t("knock_requests.close_room_hint")}
@@ -136,14 +136,14 @@ const KnockRequestRow: FC<RowProps> = ({ member, onApprove, onReject }) => {
         src={member.getMxcAvatarUrl() ?? undefined}
         size={AvatarSize.SM}
       />
-      <Text size="sm" weight="semibold" className={styles.name}>
+      <Text size="md" weight="semibold" className={styles.name}>
         {member.name}
       </Text>
       <div className={styles.actions}>
-        <Button size="sm" kind="secondary" onClick={reject}>
+        <Button size="md" kind="secondary" onClick={reject}>
           {t("knock_requests.reject")}
         </Button>
-        <Button size="sm" onClick={approve}>
+        <Button size="md" onClick={approve}>
           {t("knock_requests.approve")}
         </Button>
       </div>

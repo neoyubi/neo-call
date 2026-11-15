@@ -33,6 +33,17 @@ function getPreferredAudioFormat(): "ogg" | "mp3" {
 const preferredFormat = getPreferredAudioFormat();
 
 /**
+ * Load the bytes of a single sound file.
+ * @param url Where the sound is.
+ * @returns The bytes, or null if the sound could not be loaded.
+ */
+async function loadSound(url: string): Promise<ArrayBuffer | null> {
+  const response = await fetch(url);
+  if (isFailure(response)) return null;
+  return await response.arrayBuffer();
+}
+
+/**
  * Prefetch sounds to be used by the AudioContext. This can
  * be called outside the scope of a component to ensure the
  * sounds load ahead of time.
@@ -47,18 +58,20 @@ export async function prefetchSounds<S extends string>(
     Object.entries(sounds).map(async ([name, file]) => {
       const { mp3, ogg } = file as SoundDefinition;
       // Use preferred format, fallback to ogg if no mp3 is provided.
-      // Load an audio file
-      const response = await fetch(
-        preferredFormat === "ogg" ? ogg : (mp3 ?? ogg),
-      );
-      if (isFailure(response)) {
+      const url = preferredFormat === "ogg" ? ogg : (mp3 ?? ogg);
+      let buffer: ArrayBuffer | null = null;
+      try {
+        buffer = await loadSound(url);
+      } catch (e) {
+        logger.warn(`Could not load sound ${name}`, e);
+      }
+      if (buffer === null) {
         // If the sound doesn't load, it's not the end of the world. We won't play
         // the sound when requested, but it's better than failing the whole application.
         logger.warn(`Could not load sound ${name}, response was not okay`);
         return;
       }
-      // Decode it
-      buffers[name] = await response.arrayBuffer();
+      buffers[name] = buffer;
     }),
   );
   return buffers as Record<S, ArrayBuffer>;

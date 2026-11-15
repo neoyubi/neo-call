@@ -7,7 +7,7 @@ Please see LICENSE in the repository root for full details.
 
 import { expect, test } from "@playwright/test";
 
-import { createJTWToken } from "./fixtures/jwt-token";
+import { createJWTToken } from "./fixtures/jwt-token";
 
 test("Should show error screen if fails to get JWT token", async ({ page }) => {
   await page.goto("/");
@@ -95,15 +95,17 @@ test("Should show error screen if call creation is restricted", async ({
         contentType: "application/json",
         body: JSON.stringify({
           url: "wss://badurltotricktest/livekit/sfu",
-          jwt: createJTWToken("@fake:user", "!fake:room"),
+          jwt: createJWTToken("@fake:user", "!fake:room"),
         }),
       }),
   );
 
   // Then if the socket connection fails, livekit will try to validate the token!
   // Livekit will not auto_create anymore and will return a 404 error.
+  // Note the regex is required as livekit-client is nowasays trying two
+  // differnt APIs
   await page.route(
-    "**/badurltotricktest/livekit/sfu/rtc/validate?**",
+    /.*\/badurltotricktest\/livekit\/sfu\/rtc(\/v1)?\/validate?.*/,
     async (route) =>
       await route.fulfill({
         status: 404,

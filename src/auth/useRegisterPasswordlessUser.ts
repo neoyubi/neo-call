@@ -13,9 +13,9 @@ import { useClient, type Session } from "../ClientContext";
 import { useInteractiveRegistration } from "../auth/useInteractiveRegistration";
 import { generateRandomName } from "../auth/generateRandomName";
 import { useRecaptcha } from "../auth/useRecaptcha";
-import { widget } from "../widget";
+import { useUrlParams } from "../UrlParams";
 import { Config } from "../config/Config";
-import { initClient } from "../utils/matrix";
+import { initClient } from "../utils/initClient";
 
 interface UseRegisterPasswordlessUserType {
   privacyPolicyUrl?: string;
@@ -25,6 +25,7 @@ interface UseRegisterPasswordlessUserType {
 
 export function useRegisterPasswordlessUser(): UseRegisterPasswordlessUserType {
   const { setClient } = useClient();
+  const { isWidget } = useUrlParams();
   const proxyUrl = Config.get().guest_registration_url;
 
   // Hooks must be called unconditionally (React rules of hooks).
@@ -38,7 +39,7 @@ export function useRegisterPasswordlessUser(): UseRegisterPasswordlessUserType {
       if (!setClient) {
         throw new Error("No client context");
       }
-      if (widget) {
+      if (isWidget) {
         throw new Error(
           "Registration was skipped: We should never try to register password-less user in embedded mode.",
         );
@@ -116,7 +117,7 @@ export function useRegisterPasswordlessUser(): UseRegisterPasswordlessUserType {
         }
       }
     },
-    [proxyUrl, execute, reset, register, setClient],
+    [proxyUrl, execute, reset, register, setClient, isWidget],
   );
 
   return { privacyPolicyUrl, registerPasswordlessUser, recaptchaId };

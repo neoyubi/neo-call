@@ -43,7 +43,7 @@ export const NextUp: FC<Props> = ({ meetings, loading }) => {
       <Section>
         <div className={styles.empty}>
           <Text size="md">{t("home.nothing_scheduled")}</Text>
-          <Text size="sm" className={styles.emptyDetail}>
+          <Text size="md" className={styles.emptyDetail}>
             {t("home.nothing_scheduled_detail")}
           </Text>
         </div>
@@ -57,7 +57,7 @@ const Section: FC<{ children: ReactNode }> = ({ children }) => {
   const { t } = useTranslation();
   return (
     <section className={styles.section} aria-label={t("home.next_up")}>
-      <Text as="h2" size="sm" weight="semibold" className={styles.heading}>
+      <Text as="h2" size="md" weight="semibold" className={styles.heading}>
         {t("home.next_up")}
       </Text>
       {children}
@@ -118,7 +118,7 @@ const Card: FC<{ meeting: ScheduledMeeting; now: number }> = ({
             {meeting.roomName}
           </Text>
           <Text
-            size="sm"
+            size="md"
             className={urgent ? styles.urgent : styles.when}
             data-urgent={urgent || undefined}
           >
@@ -135,7 +135,7 @@ const Card: FC<{ meeting: ScheduledMeeting; now: number }> = ({
             meeting.room.name,
           )}
           kind={joinable && !ended ? "primary" : "secondary"}
-          size="sm"
+          size="md"
           Icon={VideoCallIcon}
         >
           {t("meetings.join")}

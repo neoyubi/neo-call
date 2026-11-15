@@ -4,10 +4,19 @@ Copyright 2023, 2024 New Vector Ltd.
 SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
 Please see LICENSE in the repository root for full details.
 */
-import { map, type Observable, of, type SchedulerLike } from "rxjs";
+import {
+  BehaviorSubject,
+  combineLatest,
+  map,
+  NEVER,
+  type Observable,
+  of,
+  type SchedulerLike,
+} from "rxjs";
 import { type RunHelpers, TestScheduler } from "rxjs/testing";
 import {
   expect,
+  type Mock,
   type MockedObject,
   type MockInstance,
   onTestFinished,
@@ -15,16 +24,18 @@ import {
   vitest,
 } from "vitest";
 import {
+  EventType,
   MatrixEvent,
   type Room as MatrixRoom,
   type Room,
   type RoomMember,
+  type RoomState,
   TypedEventEmitter,
 } from "matrix-js-sdk";
 import {
   CallMembership,
   type LivekitFocusSelection,
-  type LivekitTransport,
+  type UnstableLivekitTransport,
   type MatrixRTCSession,
   MatrixRTCSessionEvent,
   type MatrixRTCSessionEventHandlerMap,
@@ -34,28 +45,14 @@ import {
   type Transport,
 } from "matrix-js-sdk/lib/matrixrtc";
 import { type MembershipManagerEventHandlerMap } from "matrix-js-sdk/lib/matrixrtc/IMembershipManager";
-import {
-  type LocalParticipant,
-  type LocalTrackPublication,
-  type Participant,
-  type RemoteParticipant,
-  type RemoteTrackPublication,
-  type Room as LivekitRoom,
-  Track,
-} from "livekit-client";
+import { type RemoteParticipant } from "livekit-client";
 import { randomUUID } from "crypto";
-import { type TrackReference } from "@livekit/components-core";
 import EventEmitter from "events";
 import {
   type KeyTransportEvents,
   type KeyTransportEventsHandlerMap,
 } from "matrix-js-sdk/lib/matrixrtc/IKeyTransport";
-import { type CallMembershipIdentityParts } from "matrix-js-sdk/lib/matrixrtc/EncryptionManager";
 
-import {
-  LocalUserMediaViewModel,
-  RemoteUserMediaViewModel,
-} from "../state/MediaViewModel";
 import { E2eeType } from "../e2ee/e2eeType";
 import {
   DEFAULT_CONFIG,
@@ -63,9 +60,38 @@ import {
 } from "../config/ConfigOptions";
 import { Config } from "../config/Config";
 import { type MediaDevices } from "../state/MediaDevices";
-import { type Behavior, constant } from "../state/Behavior";
+import {
+  type AudioMediaTrack,
+  type Behavior,
+  constant,
+  type EncryptionError,
+  type LocalAudioMediaTrack,
+  type LocalRTCMember,
+  type LocalVideoMediaTrack,
+  type RTCMember,
+  type RTCParticipation,
+  type RTCSlot,
+  type ParticipationState,
+  type PublishRequest,
+  type RemoteRTCMember,
+  type TransportMetadata,
+  type VideoMediaTrack,
+} from "@element-hq/matrixrtc-sdk";
 import { ObservableScope } from "../state/ObservableScope";
 import { MuteStates } from "../state/MuteStates";
+import { nullHostBridge } from "../HostBridge";
+import {
+  createLocalUserMedia,
+  type LocalUserMediaViewModel,
+} from "../state/media/LocalUserMediaViewModel";
+import {
+  createRemoteUserMedia,
+  type RemoteUserMediaViewModel,
+} from "../state/media/RemoteUserMediaViewModel";
+import {
+  createRemoteScreenShare,
+  type RemoteScreenShareViewModel,
+} from "../state/media/RemoteScreenShareViewModel";
 
 export function withFakeTimers(continuation: () => void): void {
   vi.useFakeTimers();
@@ -78,13 +104,6 @@ export function withFakeTimers(continuation: () => void): void {
 
 export async function flushPromises(): Promise<void> {
   await new Promise<void>((resolve) => window.setTimeout(resolve));
-}
-
-export type NodeEventHandler = (...args: unknown[]) => void;
-
-export interface NodeStyleEventEmitter {
-  addListener(eventName: string | symbol, handler: NodeEventHandler): this;
-  removeListener(eventName: string | symbol, handler: NodeEventHandler): this;
 }
 
 export interface OurRunHelpers extends RunHelpers {
@@ -196,10 +215,9 @@ export function mockEmitter<T>(): EmitterMock<T> {
   };
 }
 
-export const exampleTransport: LivekitTransport = {
+export const exampleTransport: UnstableLivekitTransport = {
   type: "livekit",
   livekit_service_url: "https://lk.example.org",
-  livekit_alias: "!alias:example.org",
 };
 
 export function mockRtcMembership(
@@ -207,6 +225,8 @@ export function mockRtcMembership(
   deviceId: string,
   customOverwrites?: {
     rtcBackendIdentity?: string;
+    /** Every identity the member may have on its transport, where more than one. */
+    backendIdentities?: string[];
     callId?: string;
     fociPreferred?: Transport[];
     focusActive?: LivekitFocusSelection;
@@ -219,7 +239,7 @@ export function mockRtcMembership(
       fociPreferred: [exampleTransport],
       focusActive: {
         type: "livekit" as const,
-        focus_selection: "oldest_membership" as const,
+        focus_selection: "multi_sfu" as const,
       },
       callId: "",
       membership: {},
@@ -238,25 +258,22 @@ export function mockRtcMembership(
   const event = new MatrixEvent({
     sender: userId,
     event_id: `$-ev-${randomUUID()}:example.org`,
+    type: EventType.GroupCallMemberPrefix,
     content: data,
   });
 
-  const membershipData = CallMembership.membershipDataFromMatrixEvent(event);
+  const backendIdentity = rtcBackendIdentity ?? `${userId}:${deviceId}`;
   const cms = new CallMembership(
     event,
-    membershipData,
-    rtcBackendIdentity ?? `${userId}:${deviceId}`,
+    CallMembership.membershipDataFromMatrixEvent(event),
+    customOverwrites?.backendIdentities ?? [backendIdentity],
+    backendIdentity,
   );
   vi.mocked(cms).getTransport = vi.fn().mockReturnValue(fociPreferred[0]);
 
   return cms;
 }
 
-export const ownMemberMock: CallMembershipIdentityParts = {
-  userId: "@alice:example.org",
-  deviceId: "DEVICE",
-  memberId: "@alice:example.org:DEVICE",
-};
 // Maybe it'd be good to move this to matrix-js-sdk? Our testing needs are
 // rather simple, but if one util to mock a member is good enough for us, maybe
 // it's useful for matrix-js-sdk consumers in general.
@@ -276,123 +293,284 @@ export function mockMatrixRoomMember(
 }
 
 export function mockMatrixRoom(room: Partial<MatrixRoom>): MatrixRoom {
-  return { ...mockEmitter(), ...room } as Partial<MatrixRoom> as MatrixRoom;
-}
-
-export function mockLivekitRoom(
-  room: Partial<LivekitRoom>,
-  {
-    remoteParticipants$,
-  }: { remoteParticipants$?: Observable<RemoteParticipant[]> } = {},
-): LivekitRoom {
-  const livekitRoom = {
-    options: {},
-    setE2EEEnabled: vi.fn(),
-
-    ...mockEmitter(),
-    ...room,
-  } as Partial<LivekitRoom> as LivekitRoom;
-  if (remoteParticipants$) {
-    livekitRoom.remoteParticipants = new Map();
-    remoteParticipants$.subscribe((newRemoteParticipants) => {
-      livekitRoom.remoteParticipants.clear();
-      newRemoteParticipants.forEach((p) => {
-        livekitRoom.remoteParticipants.set(p.identity, p);
-      });
-    });
-  }
-
-  return livekitRoom;
-}
-
-export function mockLocalParticipant(
-  participant: Partial<LocalParticipant>,
-): LocalParticipant {
   return {
-    isLocal: true,
-    trackPublications: new Map(),
-    publishTrack: vi.fn(),
-    unpublishTracks: vi.fn().mockResolvedValue([]),
-    createTracks: vi.fn(),
-    setMicrophoneEnabled: vi.fn(),
-    setCameraEnabled: vi.fn(),
-    getTrackPublication: () =>
-      ({}) as Partial<LocalTrackPublication> as LocalTrackPublication,
     ...mockEmitter(),
-    ...participant,
-  } as Partial<LocalParticipant> as LocalParticipant;
+    // Read by the room code badge and the knock panel: a room has no alias, no
+    // one knocking and no power levels unless a test gives them
+    getCanonicalAlias: () => null,
+    currentState: {
+      ...mockEmitter(),
+      getMembers: () => [],
+      getStateEvents: () => null,
+    } as unknown as RoomState,
+    ...room,
+  } as Partial<MatrixRoom> as MatrixRoom;
 }
 
-export function createLocalMedia(
-  rtcMember: CallMembership,
-  roomMember: Partial<RoomMember>,
-  localParticipant: LocalParticipant,
-  mediaDevices: MediaDevices,
-): LocalUserMediaViewModel {
-  const member = mockMatrixRoomMember(rtcMember, roomMember);
-  return new LocalUserMediaViewModel(
-    testScope(),
-    "local",
-    member.userId,
-    rtcMember.rtcBackendIdentity,
-    constant(localParticipant),
-    {
-      kind: E2eeType.PER_PARTICIPANT,
-    },
-    constant(mockLivekitRoom({ localParticipant })),
-    constant("https://rtc-example.org"),
-    mediaDevices,
-    constant(member.rawDisplayName ?? "nodisplayname"),
-    constant(member.getMxcAvatarUrl()),
-    constant(null),
-    constant(null),
-  );
+/**
+ * A track as the SDK hands it out, with spies where a test may look. It
+ * carries the local controls too, so that one mock serves either side.
+ */
+export type MockMediaTrack = Omit<LocalAudioMediaTrack, "kind"> &
+  Omit<LocalVideoMediaTrack, "kind"> & { kind: "audio" | "video" };
+
+export function mockMediaTrack(
+  track: Partial<MockMediaTrack> = {},
+): MockMediaTrack {
+  return {
+    source: "camera",
+    kind: "video",
+    id: "track",
+    muted$: constant(false),
+    encrypted: true,
+    stats$: () => constant(undefined),
+    isActive$: constant(false),
+    audioLevel$: constant(0),
+    attach: vi.fn(),
+    detach: vi.fn(),
+    setAudioContext: vi.fn(),
+    setVolume: vi.fn(),
+    setEnabled: vi.fn(async (enabled: boolean) => Promise.resolve(enabled)),
+    setDevice: vi.fn(async () => Promise.resolve()),
+    facingMode$: constant(undefined),
+    switchFacingMode: vi.fn(async () => Promise.resolve(undefined)),
+    setProcessor: vi.fn(async () => Promise.resolve()),
+    ...track,
+  };
 }
 
+export const mockVideoTrack = (
+  track: Partial<MockMediaTrack> = {},
+): LocalVideoMediaTrack =>
+  mockMediaTrack({ kind: "video", ...track }) as LocalVideoMediaTrack;
+
+export const mockAudioTrack = (
+  track: Partial<MockMediaTrack> = {},
+): LocalAudioMediaTrack =>
+  mockMediaTrack({
+    kind: "audio",
+    source: "microphone",
+    ...track,
+  }) as LocalAudioMediaTrack;
+
+/** The tracks a member has, or null while its media has not arrived. */
+export type MockTracks = (AudioMediaTrack | VideoMediaTrack)[] | null;
+
+/** Whoever publishes media, known by identity only. */
 export function mockRemoteParticipant(
   participant: Partial<RemoteParticipant>,
 ): RemoteParticipant {
   return {
     isLocal: false,
-    setVolume() {},
-    getTrackPublication: () =>
-      ({}) as Partial<RemoteTrackPublication> as RemoteTrackPublication,
-    // this will only get used for `getTrackPublications().length`
-    getTrackPublications: () => [0],
     ...mockEmitter(),
     ...participant,
   } as RemoteParticipant;
 }
 
-export function createRemoteMedia(
+export function mockLocalMedia(
   rtcMember: CallMembership,
   roomMember: Partial<RoomMember>,
-  participant: RemoteParticipant | null,
-  livekitRoom: LivekitRoom | undefined = mockLivekitRoom(
-    {},
-    {
-      remoteParticipants$: of(participant ? [participant] : []),
-    },
-  ),
+  tracks: MockTracks,
+  mediaDevices: MediaDevices,
+): LocalUserMediaViewModel {
+  const member = mockMatrixRoomMember(rtcMember, roomMember);
+  return createLocalUserMedia(testScope(), {
+    id: "local",
+    userId: member.userId,
+    rtcBackendIdentity: rtcMember.rtcBackendIdentity,
+    member: mockRTCMember(true, {
+      membership: rtcMember,
+      roomMember,
+      tracks$: constant(tracks),
+    }),
+    encryptionSystem: { kind: E2eeType.PER_PARTICIPANT },
+    transport$: constant(exampleTransport),
+    mediaDevices,
+    displayName$: constant(member.rawDisplayName ?? "nodisplayname"),
+    mxcAvatarUrl$: constant(member.getMxcAvatarUrl()),
+    handRaised$: constant(null),
+    reaction$: constant(null),
+  });
+}
+
+export function mockRemoteMedia(
+  rtcMember: CallMembership,
+  roomMember: Partial<RoomMember>,
+  /** The tracks, or a behavior of them for a test that has them arrive. */
+  tracks: MockTracks | Behavior<MockTracks>,
+  { transport }: { transport?: Transport } = { transport: exampleTransport },
 ): RemoteUserMediaViewModel {
   const member = mockMatrixRoomMember(rtcMember, roomMember);
-  return new RemoteUserMediaViewModel(
-    testScope(),
-    "remote",
-    member.userId,
-    rtcMember.rtcBackendIdentity,
-    constant(participant),
-    {
-      kind: E2eeType.PER_PARTICIPANT,
-    },
-    constant(livekitRoom),
-    constant("https://rtc-example.org"),
-    constant(false),
-    constant(member.rawDisplayName ?? "nodisplayname"),
-    constant(member.getMxcAvatarUrl()),
-    constant(null),
-    constant(null),
+  return createRemoteUserMedia(testScope(), {
+    id: "remote",
+    userId: member.userId,
+    rtcBackendIdentity: rtcMember.rtcBackendIdentity,
+    member: mockRTCMember(false, {
+      membership: rtcMember,
+      roomMember,
+      tracks$:
+        tracks === null || Array.isArray(tracks) ? constant(tracks) : tracks,
+    }),
+    encryptionSystem: { kind: E2eeType.PER_PARTICIPANT },
+    transport$: constant(transport),
+    pretendToBeDisconnected$: constant(false),
+    displayName$: constant(member.rawDisplayName ?? "nodisplayname"),
+    mxcAvatarUrl$: constant(member.getMxcAvatarUrl()),
+    handRaised$: constant(null),
+    reaction$: constant(null),
+  });
+}
+
+export function mockRemoteScreenShare(
+  rtcMember: CallMembership,
+  roomMember: Partial<RoomMember>,
+  tracks: MockTracks,
+): RemoteScreenShareViewModel {
+  const member = mockMatrixRoomMember(rtcMember, roomMember);
+  return createRemoteScreenShare(testScope(), {
+    id: "screenshare",
+    userId: member.userId,
+    member: mockRTCMember(false, {
+      membership: rtcMember,
+      roomMember,
+      tracks$: constant(tracks),
+    }),
+    encryptionSystem: { kind: E2eeType.PER_PARTICIPANT },
+    transport$: constant(exampleTransport),
+    pretendToBeDisconnected$: constant(false),
+    displayName$: constant(member.rawDisplayName ?? "nodisplayname"),
+    mxcAvatarUrl$: constant(member.getMxcAvatarUrl()),
+  });
+}
+
+export interface MockMemberInputs {
+  membership: CallMembership;
+  roomMember?: Partial<RoomMember>;
+  /** Null, the default, is a member whose media has not arrived. */
+  tracks$?: Behavior<MockTracks>;
+  encryptionError$?: Observable<EncryptionError>;
+  transportUrl?: string | undefined;
+}
+
+/** A member as the client hands it out. */
+export function mockRTCMember(
+  local: true,
+  inputs: MockMemberInputs,
+): LocalRTCMember;
+export function mockRTCMember(
+  local: false,
+  inputs: MockMemberInputs,
+): RemoteRTCMember;
+export function mockRTCMember(
+  local: boolean,
+  {
+    membership,
+    roomMember,
+    tracks$ = constant(null),
+    encryptionError$ = NEVER,
+    transportUrl,
+  }: MockMemberInputs,
+): LocalRTCMember | RemoteRTCMember {
+  const member = mockMatrixRoomMember(membership, roomMember);
+  const transport: TransportMetadata | undefined =
+    transportUrl === undefined
+      ? undefined
+      : {
+          type: "livekit",
+          id: transportUrl,
+          raw: { type: "livekit", livekit_service_url: transportUrl },
+          resolved$: constant(undefined),
+        };
+  const base = {
+    rtcBackendIdentity: membership.rtcBackendIdentity,
+    backendIdentities: membership.backendIdentities,
+    userId: membership.userId,
+    deviceId: membership.deviceId,
+    memberId: membership.memberId,
+    displayName$: constant(member.rawDisplayName ?? membership.userId),
+    avatarUrl$: constant(member.getMxcAvatarUrl()),
+    transport$: constant(transport),
+    applicationData$: constant(membership.applicationData),
+    encryptionError$,
+  };
+  if (!local) return { ...base, local: false, tracks$ };
+  return {
+    ...base,
+    local: true,
+    // The mock tracks carry the local controls, whichever side they stand in for
+    tracks$: tracks$ as Behavior<
+      (LocalAudioMediaTrack | LocalVideoMediaTrack)[] | null
+    >,
+  };
+}
+
+export interface MockParticipationInputs {
+  localMember$?: Behavior<LocalRTCMember | null>;
+  remoteMembers$?: Behavior<RemoteRTCMember[]>;
+  state$?: Behavior<ParticipationState>;
+  keyRotationSuppressed$?: Behavior<boolean>;
+  connectedTransports$?: Behavior<TransportMetadata[]>;
+}
+
+/**
+ * A participation that does nothing but hold the state a test hands it, in a
+ * slot whose members are the same ones without their media.
+ */
+export function mockRTCParticipation(
+  scope: ObservableScope,
+  {
+    localMember$ = constant(null),
+    remoteMembers$ = constant([]),
+    state$ = constant<ParticipationState>({ kind: "connected" }),
+    keyRotationSuppressed$ = constant(false),
+    connectedTransports$ = constant([]),
+  }: MockParticipationInputs = {},
+): RTCParticipation {
+  const members$ = scope.behavior<RTCMember[]>(
+    combineLatest([localMember$, remoteMembers$], (local, remote) =>
+      local === null ? remote : [local, ...remote],
+    ),
   );
+  const participation$ = new BehaviorSubject<RTCParticipation | null>(null);
+  const slot: RTCSlot = {
+    roomId: "!room:example.org",
+    application: "m.call",
+    id: "ROOM",
+    status$: constant("open"),
+    members$,
+    participation$,
+    join: vi.fn(() => participation$.value!),
+  };
+  const participation: RTCParticipation = {
+    slot,
+    leave: vi.fn(),
+    state$,
+    localMember$,
+    remoteMembers$,
+    publish: vi.fn(async (request: PublishRequest) =>
+      Promise.resolve(
+        request.source === "microphone"
+          ? mockAudioTrack()
+          : mockVideoTrack({ source: request.source }),
+      ),
+    ),
+    unpublish: vi.fn(async () => Promise.resolve()),
+    keyRotationSuppressed$,
+    connectedTransports$,
+    setAudioOutputDeviceId: vi.fn(async () => Promise.resolve()),
+    sendData: vi.fn(async () => Promise.resolve()),
+    data$: NEVER,
+  };
+  participation$.next(participation);
+  return participation;
+}
+
+/** The slot of a `mockRTCParticipation`, whose `join()` returns that participation. */
+export function mockRTCSlot(
+  scope: ObservableScope,
+  inputs: MockParticipationInputs = {},
+): RTCSlot {
+  return mockRTCParticipation(scope, inputs).slot;
 }
 
 export function mockConfig(
@@ -401,6 +579,12 @@ export function mockConfig(
   const spy = vi.spyOn(Config, "get").mockReturnValue({
     ...DEFAULT_CONFIG,
     ...config,
+    default_server_config: {
+      ["m.homeserver"]: {
+        base_url: "http://localhost:8008",
+        server_name: "localhost",
+      },
+    },
   });
   // simulate loading the config
   vi.spyOn(Config, "init").mockResolvedValue(void 0);
@@ -416,12 +600,9 @@ export class MockRTCSession extends TypedEventEmitter<
   public asMockedSession(): MockedObject<MatrixRTCSession> {
     const session = this as unknown as MockedObject<MatrixRTCSession>;
 
-    vi.mocked(session).reemitEncryptionKeys = vi
+    session.reemitEncryptionKeys = vi
       .fn<() => void>()
       .mockReturnValue(undefined);
-    vi.mocked(session).getOldestMembership = vi
-      .fn<() => CallMembership | undefined>()
-      .mockReturnValue(this.memberships[0]);
 
     return session;
   }
@@ -430,7 +611,9 @@ export class MockRTCSession extends TypedEventEmitter<
     counters: {},
   };
 
-  public leaveRoomSession = vitest.fn().mockResolvedValue(undefined);
+  public leave: ReturnType<typeof vitest.fn> = vitest
+    .fn()
+    .mockResolvedValue(undefined);
 
   public constructor(
     public readonly room: Room,
@@ -443,6 +626,8 @@ export class MockRTCSession extends TypedEventEmitter<
   public isJoined(): boolean {
     return this.joined;
   }
+
+  public isKeyRotationSuppressed = false;
 
   public withMemberships(
     rtcMembers$: Behavior<Partial<CallMembership>[]>,
@@ -460,7 +645,7 @@ export class MockRTCSession extends TypedEventEmitter<
     return this;
   }
 
-  public updateCallIntent = vitest
+  public updateCallIntent: ReturnType<typeof vitest.fn> = vitest
     .fn()
     .mockImplementation(async () => Promise.resolve());
 
@@ -485,33 +670,10 @@ export class MockRTCSession extends TypedEventEmitter<
     if (value !== prev) this.emit(MembershipManagerEvent.ProbablyLeft, value);
   }
 
-  public async joinRTCSession(): Promise<void> {
+  public async join(): Promise<void> {
     return Promise.resolve();
   }
 }
-
-export const mockTrack = (
-  participant: Participant,
-  kind?: Track.Kind,
-  source?: Track.Source,
-): TrackReference =>
-  ({
-    participant,
-    publication: {
-      kind: kind ?? Track.Kind.Audio,
-      source: source ?? Track.Source.Microphone,
-      trackSid: `123##${participant.identity}`,
-      track: {
-        attach: vi.fn(),
-        detach: vi.fn(),
-        setAudioContext: vi.fn(),
-        setWebAudioPlugins: vi.fn(),
-        setVolume: vi.fn(),
-      },
-    },
-    track: {},
-    source: {},
-  }) as unknown as TrackReference;
 
 export const deviceStub = {
   available$: of(new Map<never, never>()),
@@ -532,8 +694,105 @@ export function mockMuteStates(
   joined$: Observable<boolean> = of(true),
 ): MuteStates {
   const observableScope = new ObservableScope();
-  return new MuteStates(observableScope, mockMediaDevices({}), {
-    audioEnabled: false,
-    videoEnabled: false,
+  return new MuteStates(
+    observableScope,
+    mockMediaDevices({}),
+    { audioEnabled: false, videoEnabled: false },
+    nullHostBridge,
+  );
+}
+
+export interface StubbedCapture {
+  getUserMedia: Mock;
+  /** Grants the microphone, as the browser does once permission is given. */
+  grant: () => void;
+  track: { stop: Mock };
+  contexts: { close: Mock }[];
+  /** Runs the pending animation frames, in order. */
+  drawFrames: (count: number) => void;
+  /** Sets the microphone's loudness from the next frame, 0 to 1. */
+  speak: (amplitude: number) => void;
+}
+
+/**
+ * Stubs the capture and Web Audio APIs, with the grant and the animation
+ * frames driven by the test. Undo with {@link restoreAudioCapture}.
+ */
+export function stubAudioCapture(): StubbedCapture {
+  const track = { stop: vi.fn() };
+  const contexts: { close: Mock }[] = [];
+  let grant = (): void => {};
+  const granted = new Promise<MediaStream>((resolve) => {
+    grant = (): void =>
+      resolve({ getTracks: () => [track] } as unknown as MediaStream);
   });
+
+  const frames: FrameRequestCallback[] = [];
+  let amplitude = 0;
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  vi.stubGlobal("cancelAnimationFrame", vi.fn());
+  vi.stubGlobal(
+    "AudioContext",
+    class {
+      public readonly state = "running";
+      public readonly close = vi.fn();
+      public constructor() {
+        contexts.push(this);
+      }
+      public createAnalyser(): object {
+        return {
+          fftSize: 1024,
+          getByteTimeDomainData: (samples: Uint8Array): void => {
+            // Silence is the midpoint of the range; a zeroed buffer reads as full scale.
+            if (amplitude <= 0) {
+              samples.fill(128);
+              return;
+            }
+            const peak = Math.round(Math.min(1, amplitude) * 127);
+            for (let i = 0; i < samples.length; i++)
+              samples[i] = 128 + (i % 2 ? peak : -peak);
+          },
+        };
+      }
+      public createMediaStreamSource(): object {
+        return { connect: (): void => {} };
+      }
+    },
+  );
+  // Only this property: replacing navigator loses getters like userAgent.
+  Object.defineProperty(navigator, "mediaDevices", {
+    configurable: true,
+    value: { getUserMedia: vi.fn().mockReturnValue(granted) },
+  });
+
+  return {
+    getUserMedia: navigator.mediaDevices.getUserMedia as unknown as Mock,
+    grant: () => grant(),
+    track,
+    contexts,
+    drawFrames: (count): void => {
+      for (let i = 0; i < count; i++) frames.shift()?.(i);
+    },
+    speak: (next): void => {
+      amplitude = next;
+    },
+  };
+}
+
+const realMediaDevices = Object.getOwnPropertyDescriptor(
+  navigator,
+  "mediaDevices",
+);
+
+/** Undoes {@link stubAudioCapture}. */
+export function restoreAudioCapture(): void {
+  vi.unstubAllGlobals();
+  if (realMediaDevices === undefined) {
+    Reflect.deleteProperty(navigator, "mediaDevices");
+  } else {
+    Object.defineProperty(navigator, "mediaDevices", realMediaDevices);
+  }
 }

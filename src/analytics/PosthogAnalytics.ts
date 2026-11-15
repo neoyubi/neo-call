@@ -7,6 +7,7 @@ Please see LICENSE in the repository root for full details.
 
 import posthog, {
   type CaptureOptions,
+  type CaptureResult,
   type PostHog,
   type Properties,
 } from "posthog-js";
@@ -14,7 +15,6 @@ import { logger } from "matrix-js-sdk/lib/logger";
 import { type MatrixClient } from "matrix-js-sdk";
 import { type Subscription } from "rxjs";
 
-import { widget } from "../widget";
 import {
   CallEndedTracker,
   CallStartedTracker,
@@ -26,9 +26,8 @@ import {
   QualitySurveyEventTracker,
   CallDisconnectedEventTracker,
   CallConnectDurationTracker,
+  CallReconnectingTracker,
 } from "./PosthogEvents";
-import { Config } from "../config/Config";
-import { getUrlParams } from "../UrlParams";
 import { optInAnalytics } from "../settings/settings";
 
 /* Posthog analytics tracking.
@@ -64,12 +63,100 @@ export enum RegistrationType {
   Registered,
 }
 
+// Sanitize URL / referrer / device fields on a single posthog properties bag.
+// Applied to event.properties and to the person-profile bags ($set / $set_once),
+// since posthog mirrors the same URL fields into those.
+function stripSensitiveFields(
+  obj: Properties | undefined,
+  anonymity: Anonymity,
+): void {
+  if (!obj) return;
+
+  if (anonymity === Anonymity.Anonymous) {
+    // drop referrer information for anonymous users
+    delete obj["$referrer"];
+    delete obj["$referring_domain"];
+    delete obj["$initial_referrer"];
+    delete obj["$initial_referring_domain"];
+
+    // drop device ID, which is a UUID persisted in local storage
+    delete obj["$device_id"];
+  }
+
+  // the url leaks a lot of private data like the call name or the user
+  // (room password / room ID can land in the hash/query). Strip down to
+  // scheme + host so we still get host-level insights (develop / main / sfu).
+  for (const key of ["$current_url", "$initial_current_url"]) {
+    if (typeof obj[key] === "string") {
+      try {
+        const url = new URL(obj[key]);
+        obj[key] = url.protocol + "//" + url.hostname + url.pathname;
+      } catch {
+        obj[key] = null;
+      }
+    }
+  }
+
+  // $session_entry_url carries the full untrimmed URL; $initial_person_info
+  // bundles initial referrer + URL into a nested object that bypasses the
+  // per-key strips above. Drop both.
+  delete obj["$session_entry_url"];
+  delete obj["$initial_person_info"];
+}
+
+/**
+ * Strip PII from posthog's built-in properties (URL, referrer fields,
+ * device ID, $initial_person_info, $session_entry_url) before events leave
+ * the client. Also applied to the person-profile bags ($set / $set_once),
+ * which mirror the same URL fields.
+ * See src/utils/event-utils.ts in posthog-js (getEventProperties, getPersonInfo)
+ * for the list of properties posthog sets automatically.
+ */
+export function santizeSensitiveData(
+  event: CaptureResult | null,
+  anonymity: Anonymity,
+): CaptureResult | null {
+  if (event === null) return null;
+
+  stripSensitiveFields(event.properties, anonymity);
+  // posthog can stash person-profile updates either at the top level
+  // of CaptureResult or nested inside properties depending on the pipeline
+  // stage; clean both spots so nothing slips through.
+  stripSensitiveFields(event.$set, anonymity);
+  stripSensitiveFields(event.$set_once, anonymity);
+  stripSensitiveFields(event.properties["$set"], anonymity);
+  stripSensitiveFields(event.properties["$set_once"], anonymity);
+
+  return event;
+}
+
 interface PlatformProperties {
   appVersion: string;
   matrixBackend: "embedded" | "jssdk";
   callBackend: "livekit" | "full-mesh";
   cryptoVersion?: string;
 }
+
+/**
+ * How analytics reporting should be set up, supplied by whoever is starting
+ * Element Call rather than discovered from the page it happens to be on.
+ */
+export interface AnalyticsConfig {
+  /** The PostHog project key. Without one, analytics stay switched off. */
+  apiKey?: string;
+  apiHost?: string;
+  /**
+   * How Element Call reaches Matrix. When `embedded`, the host owns the user's
+   * identity: it supplies the analytics ID, and Element Call must not store one
+   * in the user's account data.
+   */
+  matrixBackend: "embedded" | "jssdk";
+  /** The analytics ID the host has assigned to this user, when embedded. */
+  hostAnalyticsId?: string | null;
+}
+
+/** Analytics are off until someone asks for them. */
+const analyticsDisabled: AnalyticsConfig = { matrixBackend: "jssdk" };
 
 export class PosthogAnalytics {
   /* Wrapper for Posthog analytics.
@@ -98,13 +185,32 @@ export class PosthogAnalytics {
   private registrationType: RegistrationType = RegistrationType.Guest;
   private optInListener: Subscription | null = null;
 
+  private static analyticsConfig: AnalyticsConfig = analyticsDisabled;
+
+  /**
+   * Sets up analytics reporting. Must be called before the instance is first
+   * used; without it, analytics stay switched off.
+   */
+  public static configure(config: AnalyticsConfig): void {
+    if (this.internalInstance)
+      // Configuration is read once, when the instance is built, so arriving
+      // late means analytics are already running unconfigured.
+      logger.warn(
+        "Analytics were configured after they had already been started; the new configuration will not take effect",
+      );
+    this.analyticsConfig = config;
+  }
+
   public static hasInstance(): boolean {
     return Boolean(this.internalInstance);
   }
 
   public static get instance(): PosthogAnalytics {
     if (!this.internalInstance) {
-      this.internalInstance = new PosthogAnalytics(posthog);
+      this.internalInstance = new PosthogAnalytics(
+        posthog,
+        PosthogAnalytics.analyticsConfig,
+      );
     }
     return this.internalInstance;
   }
@@ -112,29 +218,26 @@ export class PosthogAnalytics {
   public static resetInstance(): void {
     // Reset the singleton instance
     this.internalInstance = null;
+    this.analyticsConfig = analyticsDisabled;
   }
 
-  private constructor(private readonly posthog: PostHog) {
-    let apiKey: string | undefined;
-    let apiHost: string | undefined;
-    if (import.meta.env.VITE_PACKAGE === "embedded") {
-      // for the embedded package we always use the values from the URL as the widget host is responsible for analytics configuration
-      apiKey = getUrlParams().posthogApiKey ?? undefined;
-      apiHost = getUrlParams().posthogApiHost ?? undefined;
-    } else if (import.meta.env.VITE_PACKAGE === "full") {
-      // in full package it is the server responsible for the analytics
-      apiKey = Config.get().posthog?.api_key;
-      apiHost = Config.get().posthog?.api_host;
-    }
+  private constructor(
+    private readonly posthog: PostHog,
+    private readonly config: AnalyticsConfig,
+  ) {
+    const { apiKey, apiHost } = config;
 
     if (apiKey && apiHost) {
+      const beforeSend = (event: CaptureResult | null): CaptureResult | null =>
+        santizeSensitiveData(event, this.anonymity);
       this.posthog.init(apiKey, {
         api_host: apiHost,
         autocapture: false,
         mask_all_text: true,
         mask_all_element_attributes: true,
+        mask_personal_data_properties: true,
         capture_pageview: false,
-        sanitize_properties: this.sanitizeProperties,
+        before_send: beforeSend,
         respect_dnt: true,
         advanced_disable_decide: true,
       });
@@ -147,49 +250,21 @@ export class PosthogAnalytics {
     }
   }
 
-  private sanitizeProperties = (
-    properties: Properties,
-    _eventName: string,
-  ): Properties => {
-    // Callback from posthog to sanitize properties before sending them to the server.
-    // Here we sanitize posthog's built in properties which leak PII e.g. url reporting.
-    // See utils.js _.info.properties in posthog-js.
-
-    if (this.anonymity == Anonymity.Anonymous) {
-      // drop referrer information for anonymous users
-      properties["$referrer"] = null;
-      properties["$referring_domain"] = null;
-      properties["$initial_referrer"] = null;
-      properties["$initial_referring_domain"] = null;
-
-      // drop device ID, which is a UUID persisted in local storage
-      properties["$device_id"] = null;
-    }
-    // the url leaks a lot of private data like the call name or the user.
-    // Its stripped down to the bare minimum to only give insights about the host (develop, main or sfu)
-    properties["$current_url"] = (properties["$current_url"] as string)
-      .split("/")
-      .slice(0, 3)
-      .join("");
-
-    return properties;
-  };
-
   private registerSuperProperties(properties: Properties): void {
     if (this.enabled) {
       this.posthog.register(properties);
     }
   }
 
-  private static getPlatformProperties(): PlatformProperties {
+  private getPlatformProperties(): PlatformProperties {
     const appVersion = import.meta.env.VITE_APP_VERSION || "dev";
     return {
       appVersion,
-      matrixBackend: widget ? "embedded" : "jssdk",
+      matrixBackend: this.config.matrixBackend,
       callBackend: "livekit",
-      cryptoVersion: widget
-        ? undefined
-        : window.matrixclient?.getCrypto()?.getVersion(),
+      // Undefined when Element Call has no crypto of its own, which is the case
+      // whenever a host is doing the encrypting for it.
+      cryptoVersion: window.matrixclient?.getCrypto()?.getVersion(),
     };
   }
 
@@ -239,8 +314,8 @@ export class PosthogAnalytics {
       // different devices to send the same ID.
       let analyticsID = await this.getAnalyticsId();
       try {
-        if (!analyticsID && !widget) {
-          // only try setting up a new analytics ID in the standalone app.
+        if (!analyticsID && this.config.matrixBackend !== "embedded") {
+          // only mint an analytics ID when we are the ones storing it.
 
           // Couldn't retrieve an analytics ID from user settings, so create one and set it on the server.
           // Note there's a race condition here - if two devices do these steps at the same time, last write
@@ -269,8 +344,8 @@ export class PosthogAnalytics {
 
   private async getAnalyticsId(): Promise<string | null> {
     const client: MatrixClient = window.matrixclient;
-    if (widget) {
-      return getUrlParams().posthogUserId;
+    if (this.config.matrixBackend === "embedded") {
+      return this.config.hostAnalyticsId ?? null;
     } else {
       const accountData = await client.getAccountDataFromServer(
         PosthogAnalytics.ANALYTICS_EVENT_TYPE,
@@ -280,7 +355,7 @@ export class PosthogAnalytics {
   }
 
   private async setAccountAnalyticsId(analyticsID: string): Promise<void> {
-    if (!widget) {
+    if (this.config.matrixBackend !== "embedded") {
       const client = window.matrixclient;
 
       // the analytics ID only needs to be set in the standalone version.
@@ -318,7 +393,7 @@ export class PosthogAnalytics {
     // These properties will be subsequently passed in every event.
     //
     // This only needs to be done once per page lifetime. Note that getPlatformProperties
-    this.platformSuperProperties = PosthogAnalytics.getPlatformProperties();
+    this.platformSuperProperties = this.getPlatformProperties();
     this.registerSuperProperties({
       ...this.platformSuperProperties,
       registrationType:
@@ -421,4 +496,5 @@ export class PosthogAnalytics {
   public eventQualitySurvey = new QualitySurveyEventTracker();
   public eventCallDisconnected = new CallDisconnectedEventTracker();
   public eventCallConnectDuration = new CallConnectDurationTracker();
+  public eventCallReconnecting = new CallReconnectingTracker();
 }

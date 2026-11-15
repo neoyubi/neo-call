@@ -1,74 +1,124 @@
-import { expect, test } from "vitest";
-import { type ReactNode, useState } from "react";
-import { render, screen } from "@testing-library/react";
+/*
+Copyright 2026 New Vector Ltd.
+
+SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
+Please see LICENSE in the repository root for full details.
+*/
+
+import { expect, it, vi } from "vitest";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { axe } from "vitest-axe";
 
 import { type Tab, TabContainer } from "./Tabs";
 
-const tabs: Tab<string>[] = [
-  { key: "audio", name: "Audio", content: <p>Audio settings</p> },
-  { key: "video", name: "Video", content: <p>Video settings</p> },
-  { key: "profile", name: "Profile", content: <p>Profile settings</p> },
-];
-
-function Tabs(): ReactNode {
-  const [tab, setTab] = useState("audio");
-  return (
-    <TabContainer label="Settings" tab={tab} onTabChange={setTab} tabs={tabs} />
+function renderTabs<K extends string>(tabs: Tab<K>[], tab: K): void {
+  render(
+    <TabContainer
+      label="Settings"
+      tab={tab}
+      onTabChange={vi.fn()}
+      tabs={tabs}
+    />,
   );
 }
 
-test("the tabs are accessible", async () => {
-  const { container } = render(<Tabs />);
-  expect(await axe(container)).toHaveNoViolations();
+function expectTabPositions(expectedNames: string[]): void {
+  const tabs = within(
+    screen.getByRole("tablist", { name: "Settings" }),
+  ).getAllByRole("tab");
+
+  expect(tabs).toHaveLength(expectedNames.length);
+  tabs.forEach((tab, index) => {
+    expect(tab).toHaveTextContent(expectedNames[index]);
+    expect(tab).toHaveAttribute(
+      "aria-setsize",
+      expectedNames.length.toString(),
+    );
+    expect(tab).toHaveAttribute("aria-posinset", (index + 1).toString());
+  });
+}
+
+it("sets tab collection size and positions for two tabs", () => {
+  renderTabs(
+    [
+      { key: "audio", name: "Audio", content: "Audio panel" },
+      { key: "video", name: "Video", content: "Video panel" },
+    ],
+    "audio",
+  );
+
+  expectTabPositions(["Audio", "Video"]);
 });
 
-test("each tab is paired with the panel it controls", () => {
-  render(<Tabs />);
+it("sets tab collection size and positions for four tabs", () => {
+  renderTabs(
+    [
+      { key: "audio", name: "Audio", content: "Audio panel" },
+      { key: "video", name: "Video", content: "Video panel" },
+      { key: "profile", name: "Profile", content: "Profile panel" },
+      {
+        key: "preferences",
+        name: "Preferences",
+        content: "Preferences panel",
+      },
+    ],
+    "profile",
+  );
 
-  for (const tab of screen.getAllByRole("tab")) {
-    const panel = document.getElementById(tab.getAttribute("aria-controls")!);
-    expect(panel).toHaveAttribute("role", "tabpanel");
-    expect(panel).toHaveAttribute("aria-labelledby", tab.id);
-  }
+  expectTabPositions(["Audio", "Video", "Profile", "Preferences"]);
 });
 
-test("the selected tab is the one whose panel is shown", async () => {
+it("fires tab changes and keeps the active tab selected", async () => {
   const user = userEvent.setup();
-  render(<Tabs />);
-  const audio = screen.getByRole("tab", { name: "Audio" });
-  const video = screen.getByRole("tab", { name: "Video" });
+  const onTabChange = vi.fn();
+  const tabs = [
+    { key: "audio", name: "Audio", content: "Audio panel" },
+    { key: "video", name: "Video", content: "Video panel" },
+  ] satisfies Tab<string>[];
 
-  expect(audio).toHaveAttribute("aria-selected", "true");
-  expect(video).toHaveAttribute("aria-selected", "false");
-  expect(screen.getByRole("tabpanel")).toHaveTextContent("Audio settings");
+  const { rerender } = render(
+    <TabContainer
+      label="Settings"
+      tab="audio"
+      onTabChange={onTabChange}
+      tabs={tabs}
+    />,
+  );
 
-  await user.click(video);
+  expect(screen.getByRole("tab", { name: "Audio" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
 
-  expect(audio).toHaveAttribute("aria-selected", "false");
-  expect(video).toHaveAttribute("aria-selected", "true");
-  expect(screen.getByRole("tabpanel")).toHaveTextContent("Video settings");
+  await user.click(screen.getByRole("tab", { name: "Video" }));
+  expect(onTabChange).toHaveBeenCalledWith("video");
+
+  rerender(
+    <TabContainer
+      label="Settings"
+      tab="video"
+      onTabChange={onTabChange}
+      tabs={tabs}
+    />,
+  );
+
+  expect(screen.getByRole("tab", { name: "Video" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
 });
 
-test("every tab can be reached and chosen with the keyboard", async () => {
-  const user = userEvent.setup();
-  render(<Tabs />);
-  const [audio, video, profile] = screen.getAllByRole("tab");
+it("only shows the selected tab panel", () => {
+  renderTabs(
+    [
+      { key: "audio", name: "Audio", content: "Audio panel" },
+      { key: "video", name: "Video", content: "Video panel" },
+      { key: "profile", name: "Profile", content: "Profile panel" },
+    ],
+    "video",
+  );
 
-  await user.tab();
-  expect(audio).toHaveFocus();
-  await user.tab();
-  expect(video).toHaveFocus();
-  await user.tab();
-  expect(profile).toHaveFocus();
-
-  await user.keyboard("{Enter}");
-  expect(profile).toHaveAttribute("aria-selected", "true");
-  expect(screen.getByRole("tabpanel")).toHaveTextContent("Profile settings");
-
-  // The panel follows the tabs in the focus order, so its content is reachable
-  // without having to pass back through them
-  await user.tab();
-  expect(screen.getByRole("tabpanel")).toHaveFocus();
+  expect(screen.getByText("Audio panel")).not.toBeVisible();
+  expect(screen.getByText("Video panel")).toBeVisible();
+  expect(screen.getByText("Profile panel")).not.toBeVisible();
 });

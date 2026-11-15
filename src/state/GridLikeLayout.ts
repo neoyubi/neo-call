@@ -7,6 +7,7 @@ Please see LICENSE in the repository root for full details.
 
 import { type Layout, type LayoutMedia } from "./layout-types.ts";
 import { type TileStore } from "./TileStore";
+import { type FloatingTile } from "./FloatingTile.ts";
 
 export type GridLikeLayoutType =
   | "grid"
@@ -19,6 +20,7 @@ export type GridLikeLayoutType =
  */
 export function gridLikeLayout(
   media: LayoutMedia & { type: GridLikeLayoutType },
+  floatingSpotlightTile: FloatingTile,
   visibleTiles: number,
   setVisibleTiles: (value: number) => void,
   prevTiles: TileStore,
@@ -35,7 +37,10 @@ export function gridLikeLayout(
   return [
     {
       type: media.type,
-      spotlight: tiles.spotlightTile,
+      spotlight: tiles.spotlightTile && {
+        vm: tiles.spotlightTile,
+        ...floatingSpotlightTile,
+      },
       grid: tiles.gridTiles,
       setVisibleTiles,
     } as Layout & { type: GridLikeLayoutType },

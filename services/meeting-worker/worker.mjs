@@ -23,7 +23,9 @@ const MEETING_RETENTION_DAYS = parseInt(
   process.env.MEETING_RETENTION_DAYS || "30",
   10,
 );
-const MEETING_DRY_RUN = /^(1|true|yes)$/i.test(process.env.MEETING_DRY_RUN || "");
+const MEETING_DRY_RUN = /^(1|true|yes)$/i.test(
+  process.env.MEETING_DRY_RUN || "",
+);
 
 const DAY_MS = 86400000;
 const SYNAPSE_TIMEOUT_MS = 5000;
@@ -193,7 +195,8 @@ function buildSuppressionRevision(meeting, uid) {
     `ORGANIZER;SCHEDULE-AGENT=CLIENT:mailto:${CALDAV_ORGANIZER_EMAIL}`,
   ];
   for (const email of [meeting.organizer_email, meeting.prospect_email]) {
-    if (email) lines.push(`ATTENDEE:mailto:${String(email).replace(/[\r\n]/g, "")}`);
+    if (email)
+      lines.push(`ATTENDEE:mailto:${String(email).replace(/[\r\n]/g, "")}`);
   }
   lines.push("STATUS:CONFIRMED", "END:VEVENT", "END:VCALENDAR");
   return lines.map(foldIcs).join("\r\n") + "\r\n";
@@ -433,7 +436,9 @@ export async function processRetention() {
     try {
       meeting = await getMeetingState(roomId);
     } catch (err) {
-      console.warn(`Retention: failed to read state for a room: ${err.message}`);
+      console.warn(
+        `Retention: failed to read state for a room: ${err.message}`,
+      );
       continue;
     }
     if (!meeting) continue;
@@ -457,7 +462,9 @@ export async function processRetention() {
 
     const ok = await putMeetingState(roomId, redacted);
     if (!ok) {
-      console.warn(`Retention: failed to redact state for booking ${bookingId}`);
+      console.warn(
+        `Retention: failed to redact state for booking ${bookingId}`,
+      );
       continue;
     }
 

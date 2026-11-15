@@ -9,7 +9,6 @@ import { type FC, type ReactNode, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { type MatrixClient } from "matrix-js-sdk";
 import { Button, Root as Form, Separator } from "@vector-im/compound-web";
-import { type Room as LivekitRoom } from "livekit-client";
 
 import { Modal } from "../Modal";
 import styles from "./SettingsModal.module.css";
@@ -17,22 +16,32 @@ import { type Tab, TabContainer } from "../tabs/Tabs";
 import { ProfileSettingsTab } from "./ProfileSettingsTab";
 import { iosDeviceMenu$ } from "../state/MediaDevices";
 import { useMediaDevices } from "../MediaDevicesContext";
-import { widget } from "../widget";
+import { useHostBridge } from "../HostBridge";
 import {
   useSetting,
   soundEffectVolume as soundEffectVolumeSetting,
-  backgroundBlur as backgroundBlurSetting,
+  backgroundEffect as backgroundEffectSetting,
   developerMode,
 } from "./settings";
 import { PreferencesSettingsTab } from "./PreferencesSettingsTab";
 import { Slider } from "../Slider";
 import { DeviceSelection } from "./DeviceSelection";
-import { useTrackProcessor } from "../livekit/TrackProcessorContext";
-import { DeveloperSettingsTab } from "./DeveloperSettingsTab";
+import { useBackgroundEffects } from "../tracks/BackgroundEffectsContext";
+import {
+  parseEffect,
+  serializeEffect,
+} from "../tracks/backgroundEffectCatalog";
+import {
+  DeveloperSettingsTab,
+  type DeveloperSettingsSnapshot,
+  type TransportInfo,
+} from "./DeveloperSettingsTab";
 import { LicenseSettingsTab } from "./LicenseSettingsTab";
 import { FieldRow, InputField } from "../input/Input";
 import { useUrlParams } from "../UrlParams";
 import { useBehavior } from "../useBehavior";
+import { type ViewModel } from "../state/ViewModel.ts";
+import { outOfCallDeveloperSettingsTabViewModel } from "./DeveloperSettingsTabViewModel";
 
 type SettingsTab =
   | "audio"
@@ -50,11 +59,10 @@ interface Props {
   onTabChange: (tab: SettingsTab) => void;
   client: MatrixClient;
   roomId?: string;
-  livekitRooms?: {
-    room: LivekitRoom;
-    url: string;
-    isLocal?: boolean;
-  }[];
+  /** The transports the client is connected to, while in a call. */
+  transports?: TransportInfo[];
+  /** Only available while in a call. Used by the developer tab. */
+  developerSettingsVm?: ViewModel<DeveloperSettingsSnapshot>;
 }
 
 export const defaultSettingsTab: SettingsTab = "audio";
@@ -66,15 +74,18 @@ export const SettingsModal: FC<Props> = ({
   onTabChange,
   client,
   roomId,
-  livekitRooms,
+  transports,
+  developerSettingsVm,
 }) => {
   const { t } = useTranslation();
 
   // Generate a `Checkbox` input to turn blur on or off.
   const BlurCheckbox: React.FC = (): ReactNode => {
-    const { supported } = useTrackProcessor();
+    const { supported } = useBackgroundEffects();
 
-    const [blurActive, setBlurActive] = useSetting(backgroundBlurSetting);
+    // The camera menu's setting, of which this control sees only blur.
+    const [effect, setEffect] = useSetting(backgroundEffectSetting);
+    const blurActive = parseEffect(effect).kind === "blur";
 
     return (
       <>
@@ -88,8 +99,12 @@ export const SettingsModal: FC<Props> = ({
               supported ? "" : t("settings.blur_not_supported_by_browser")
             }
             type="checkbox"
-            checked={!!blurActive}
-            onChange={(b): void => setBlurActive(b.target.checked)}
+            checked={blurActive}
+            onChange={(b): void =>
+              setEffect(
+                serializeEffect({ kind: b.target.checked ? "blur" : "none" }),
+              )
+            }
             disabled={!supported}
           />
         </FieldRow>
@@ -99,13 +114,12 @@ export const SettingsModal: FC<Props> = ({
 
   const devices = useMediaDevices();
   useEffect(() => {
-    if (open) devices.requestDeviceNames();
+    if (open) devices.requestDeviceNames(); // No-op after the first call
   }, [open, devices]);
 
   const [soundVolume, setSoundVolume] = useSetting(soundEffectVolumeSetting);
   const [soundVolumeRaw, setSoundVolumeRaw] = useState(soundVolume);
   const [showDeveloperSettingsTab] = useSetting(developerMode);
-
 
   // For controlled devices, we will not show the input section:
   // Controlled media devices are used on mobile platforms, where input and output are grouped into
@@ -113,6 +127,7 @@ export const SettingsModal: FC<Props> = ({
   // On EC, we decided that it is less confusing for the user if they see those options in the output section
   // rather than the input section.
   const { controlledAudioDevices } = useUrlParams();
+  const hostBridge = useHostBridge();
   // If we are on iOS we will show a button to open the native audio device picker.
   const iosDeviceMenu = useBehavior(iosDeviceMenu$);
 
@@ -150,7 +165,13 @@ export const SettingsModal: FC<Props> = ({
           />
 
           <div className={styles.volumeSlider}>
-            <label>{t("settings.audio_tab.effect_volume_label")}</label>
+            <label>
+              {t("settings.audio_tab.effect_volume_label")}
+              {": "}
+              <span className={styles.settingValue}>
+                {Math.round(soundVolumeRaw * 100)}%
+              </span>
+            </label>
             <p>{t("settings.audio_tab.effect_volume_description")}</p>
             <Slider
               label={t("video_tile.volume")}
@@ -210,13 +231,16 @@ export const SettingsModal: FC<Props> = ({
       <DeveloperSettingsTab
         env={import.meta.env}
         client={client}
-        livekitRooms={livekitRooms}
+        transports={transports}
+        roomId={roomId}
+        vm={developerSettingsVm ?? outOfCallDeveloperSettingsTabViewModel}
       />
     ),
   };
 
   const tabs = [audioTab, videoTab];
-  if (widget === null) tabs.push(profileTab);
+  // The profile is only ours to edit when the account is ours
+  if (hostBridge.supportsProfileChanges) tabs.push(profileTab);
   tabs.push(preferencesTab);
   tabs.push(licenseTab);
   if (showDeveloperSettingsTab) tabs.push(developerTab);

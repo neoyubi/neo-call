@@ -40,6 +40,9 @@ import { useMergedRefs } from "../useMergedRefs";
 import { TileWrapper } from "./TileWrapper";
 import { usePrefersReducedMotion } from "../usePrefersReducedMotion";
 import { useInitial } from "../useInitial";
+import { type DragCallback } from "../state/layout-types";
+
+const MAX_ANIMATED_TILES = 50; // Capped for performance reasons
 
 interface Rect {
   x: number;
@@ -81,7 +84,10 @@ interface DragState {
   cursorY: number;
 }
 
-interface SlotProps<Model> extends Omit<ComponentProps<"div">, "onDrag"> {
+export interface SlotProps<Model> extends Omit<
+  ComponentProps<"div">,
+  "onDrag"
+> {
   id: string;
   model: Model;
   onDrag?: DragCallback;
@@ -179,27 +185,6 @@ export interface TileProps<Model, R extends HTMLElement> {
   model: Model;
 }
 
-interface Drag {
-  /**
-   * The X coordinate of the dragged tile in grid space.
-   */
-  x: number;
-  /**
-   * The Y coordinate of the dragged tile in grid space.
-   */
-  y: number;
-  /**
-   * The X coordinate of the dragged tile, as a scalar of the grid width.
-   */
-  xRatio: number;
-  /**
-   * The Y coordinate of the dragged tile, as a scalar of the grid height.
-   */
-  yRatio: number;
-}
-
-export type DragCallback = (drag: Drag) => void;
-
 interface LayoutMemoProps<
   LayoutModel,
   TileModel,
@@ -266,12 +251,25 @@ export function Grid<
     }, []),
     useCallback(() => window.innerHeight, []),
   );
+  const orientation = useSyncExternalStore(
+    useCallback((onChange) => {
+      // Support for the change event is experimental
+      // https://developer.mozilla.org/en-US/docs/Web/API/Screen/change_event#browser_compatibility
+      (screen as unknown as EventTarget).addEventListener?.("change", onChange);
+      return (): void =>
+        (screen as unknown as EventTarget).removeEventListener?.(
+          "change",
+          onChange,
+        );
+    }, []),
+    useCallback(() => window.innerHeight, []),
+  );
+
   const [layoutRoot, setLayoutRoot] = useState<HTMLElement | null>(null);
   const [generation, setGeneration] = useState<number | null>(null);
   const [visibleTilesCallback, setVisibleTilesCallback] =
     useState<VisibleTilesCallback | null>(null);
   const tiles = useInitial(() => new Map<string, Tile<TileModel>>());
-  const prefersReducedMotion = usePrefersReducedMotion();
 
   const Slot: FC<SlotProps<TileModel>> = useMemo(
     () =>
@@ -336,10 +334,10 @@ export function Grid<
     }
 
     return result;
-    // The rects may change due to the grid resizing or updating to a new
-    // generation, but eslint can't statically verify this
+    // The rects may change due to the grid resizing, changing orientation, or
+    // updating to a new generation, but eslint can't statically verify this
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gridRoot, layoutRoot, tiles, gridBounds, generation]);
+  }, [gridRoot, layoutRoot, tiles, gridBounds, orientation, generation]);
 
   // The height of the portion of the grid visible at any given time
   const visibleHeight = useMemo(
@@ -358,6 +356,10 @@ export function Grid<
   // react-spring's imperative API during gestures to improve responsiveness
   const dragState = useRef<DragState | null>(null);
 
+  // If true, disables animations
+  const immediate =
+    usePrefersReducedMotion() || placedTiles.length > MAX_ANIMATED_TILES;
+
   const [tileTransitions, springRef] = useTransition(
     placedTiles,
     () => ({
@@ -375,9 +377,9 @@ export function Grid<
         y,
         width,
         height,
-        immediate: prefersReducedMotion,
+        immediate,
       }),
-      enter: { opacity: 1, scale: 1, immediate: prefersReducedMotion },
+      enter: { opacity: 1, scale: 1, immediate },
       update: ({
         id,
         x,
@@ -392,9 +394,9 @@ export function Grid<
               y,
               width,
               height,
-              immediate: prefersReducedMotion,
+              immediate,
             },
-      leave: { opacity: 0, scale: 0, immediate: prefersReducedMotion },
+      leave: { opacity: 0, scale: 0, immediate },
       config: { mass: 0.7, tension: 252, friction: 25 },
     }),
     // react-spring's types are bugged and can't infer the spring type
@@ -427,8 +429,7 @@ export function Grid<
               y: tile.y,
               width: tile.width,
               height: tile.height,
-              immediate:
-                prefersReducedMotion || ((key): boolean => key === "zIndex"),
+              immediate: immediate || ((key): boolean => key === "zIndex"),
               // Allow the tile's position to settle before pushing its
               // z-index back down
               delay: (key): number => (key === "zIndex" ? 500 : 0),
@@ -439,20 +440,20 @@ export function Grid<
               x: tileX,
               y: tileY,
               immediate:
-                prefersReducedMotion ||
+                immediate ||
                 ((key): boolean =>
                   key === "zIndex" || key === "x" || key === "y"),
             },
       )
       .catch(logger.error);
 
-    if (endOfGesture)
-      callback({
-        x: tileX,
-        y: tileY,
-        xRatio: tileX / (gridBounds.width - tile.width),
-        yRatio: tileY / (gridBounds.height - tile.height),
-      });
+    callback({
+      x: tileX,
+      y: tileY,
+      xRatio: tileX / (gridBounds.width - tile.width),
+      yRatio: tileY / (gridBounds.height - tile.height),
+      endOfGesture,
+    });
   };
 
   // Callback for useDrag. We could call useDrag here, but the default

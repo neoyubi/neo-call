@@ -29,6 +29,7 @@ describe("CallList", () => {
         roomAlias: "#room-name:server.org",
         room: {
           roomId: "!roomId",
+          getMyMembership: () => "join",
         },
       },
     ] as GroupCallRoom[];

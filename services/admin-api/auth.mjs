@@ -36,10 +36,7 @@ function matchesApiKey(token, apiKey) {
 // Returns { status, data } or throws on network/timeout (caller maps to 503).
 async function synapseGet(synapseUrl, path, token) {
   const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    SYNAPSE_AUTH_TIMEOUT_MS,
-  );
+  const timer = setTimeout(() => controller.abort(), SYNAPSE_AUTH_TIMEOUT_MS);
   try {
     const resp = await fetch(`${synapseUrl}${path}`, {
       method: "GET",
@@ -70,7 +67,11 @@ export async function authorizeRequest(req, env) {
 
   const token = extractBearer(req);
   if (!token) {
-    return { ok: false, status: 401, error: "Missing or malformed Authorization header" };
+    return {
+      ok: false,
+      status: 401,
+      error: "Missing or malformed Authorization header",
+    };
   }
 
   // Path A — service credential.
@@ -92,14 +93,22 @@ export async function authorizeRequest(req, env) {
       token,
     );
   } catch {
-    return { ok: false, status: 503, error: "Authentication service unavailable" };
+    return {
+      ok: false,
+      status: 503,
+      error: "Authentication service unavailable",
+    };
   }
 
   if (whoami.status === 401) {
     return { ok: false, status: 401, error: "Invalid or expired token" };
   }
   if (whoami.status !== 200 || !whoami.data?.user_id) {
-    return { ok: false, status: 503, error: "Authentication service unavailable" };
+    return {
+      ok: false,
+      status: 503,
+      error: "Authentication service unavailable",
+    };
   }
 
   const userId = whoami.data.user_id;
@@ -112,7 +121,11 @@ export async function authorizeRequest(req, env) {
       botAccessToken,
     );
   } catch {
-    return { ok: false, status: 503, error: "Authentication service unavailable" };
+    return {
+      ok: false,
+      status: 503,
+      error: "Authentication service unavailable",
+    };
   }
 
   // The bot reads this state on the caller's behalf, so a refusal here is
@@ -133,10 +146,18 @@ export async function authorizeRequest(req, env) {
 
   // 404 = no membership state for this user in the schedulers room.
   if (member.status === 404 || member.data?.membership !== "join") {
-    return { ok: false, status: 403, error: "Not authorized to schedule meetings" };
+    return {
+      ok: false,
+      status: 403,
+      error: "Not authorized to schedule meetings",
+    };
   }
   if (member.status !== 200) {
-    return { ok: false, status: 503, error: "Authentication service unavailable" };
+    return {
+      ok: false,
+      status: 503,
+      error: "Authentication service unavailable",
+    };
   }
 
   return { ok: true, scope: "scheduler", userId };

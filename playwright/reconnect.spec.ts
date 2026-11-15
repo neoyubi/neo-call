@@ -7,6 +7,8 @@ Please see LICENSE in the repository root for full details.
 
 import { expect, test } from "@playwright/test";
 
+import { SpaHelpers } from "./spa-helpers";
+
 // Skip test for Firefox, due to page.keyboard.press("Tab") not reliable on headless mode
 test.skip(
   ({ browserName }) => browserName === "firefox",
@@ -17,6 +19,12 @@ test("can only interact with header and footer while reconnecting", async ({
   page,
 }) => {
   await page.goto("/");
+
+  // The reconnecting state is entered via the probablyLeft timer, which
+  // mirrors the delayed leave event's timeout. With delegation that timeout
+  // is one hour, putting it out of reach of the clock fast-forward below.
+  // Keep the leave client-managed so its short timeout applies.
+  await SpaHelpers.disableLeaveDelegation(page);
   await page.getByTestId("home_callName").click();
   await page.getByTestId("home_callName").fill("Test call");
   await page.getByTestId("home_displayName").click();
@@ -49,12 +57,14 @@ test("can only interact with header and footer while reconnecting", async ({
   ).toBeVisible();
 
   // Tab order should jump directly from header to footer, skipping media tiles
-  await page.getByRole("button", { name: "Mute microphone" }).focus();
+  await page.getByRole("switch", { name: "Mute microphone" }).focus();
   await expect(
-    page.getByRole("button", { name: "Mute microphone" }),
+    page.getByRole("switch", { name: "Mute microphone" }),
   ).toBeFocused();
   await page.keyboard.press("Tab");
-  await expect(page.getByRole("button", { name: "Stop video" })).toBeFocused();
+  await expect(page.getByRole("button", { name: "Microphone" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("switch", { name: "Stop video" })).toBeFocused();
   // Most critically, we should be able to press the hangup button
   await page.getByRole("button", { name: "End call" }).click();
 });

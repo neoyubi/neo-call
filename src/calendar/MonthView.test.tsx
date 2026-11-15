@@ -1,12 +1,13 @@
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import i18n from "i18next";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { axe } from "vitest-axe";
 
 import { type ScheduledMeeting } from "../home/useScheduledMeetings";
 import { mockConfig } from "../utils/test";
 import { MonthView } from "./MonthView";
+import monthStyles from "./MonthView.module.css";
+import { i18n } from "../utils/i18n";
 
 // Pinned to a zone with daylight saving, before any date below is built.
 process.env.TZ = "Europe/Berlin";
@@ -86,7 +87,8 @@ describe("MonthView", () => {
     const { container } = render(
       <MonthView focusedDate={AUGUST} meetings={[]} onSelectDay={vi.fn()} />,
     );
-    const today = (): Element | null => container.querySelector(".today");
+    const today = (): Element | null =>
+      container.querySelector(`.${monthStyles.today}`);
     expect(today()).toHaveAttribute("data-date", "2026-08-15");
 
     setNow(new Date(2026, 7, 16, 0, 30));
@@ -202,8 +204,10 @@ describe("MonthView", () => {
       />,
     );
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
-    expect(container.querySelector(".marker")).toBeInTheDocument();
-    expect(container.querySelector(".selected")).toHaveAttribute(
+    expect(
+      container.querySelector(`.${monthStyles.marker}`),
+    ).toBeInTheDocument();
+    expect(container.querySelector(`.${monthStyles.selected}`)).toHaveAttribute(
       "data-date",
       "2026-08-20",
     );

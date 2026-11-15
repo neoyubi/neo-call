@@ -14,6 +14,23 @@ Please see LICENSE in the repository root for full details.
   overflow-y: auto;
 }
 
+/* Normally the footer uses a transparent background to allow our expressive
+page gradients to shine through. However, we sometimes need to visually separate
+it from the content underneath. If the call layout is overflowing, or if the
+spotlight tile is maximised and displaying video, apply a gradient background. */
+.overflowing > .footer,
+.fixedGrid:has(
+    > .tile[data-maximised="true"]
+      .spotlightItem[data-background="transparent"][data-video-enabled="true"][aria-hidden="false"]
+  )
+  ~ .footer {
+  background: linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0) 0%,
+    var(--cpd-color-bg-canvas-default) 100%
+  );
+}
+
 .header {
   position: sticky;
   flex-shrink: 0;
@@ -26,123 +43,41 @@ Please see LICENSE in the repository root for full details.
   );
 }
 
+.header.hidden {
+  display: none;
+}
+
+.header.overlay {
+  /* Note that the header is still position: sticky in this case so that certain
+    tiles can move down out of the way of the header when visible. */
+  opacity: 1;
+  transition: opacity 0.15s;
+}
+
+.header.overlay.hidden {
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
+  /* Switch to position: absolute so the header takes up no space in the layout
+    when hidden. */
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 0;
+}
+
+.header.overlay:has(:focus-visible) {
+  opacity: 1;
+  pointer-events: initial;
+}
+
 .header.filler {
   block-size: var(--cpd-space-6x);
   background: none;
 }
 
-.footer {
-  position: sticky;
-  inset-block-end: 0;
-  z-index: var(--call-view-header-footer-layer);
-  display: grid;
-  grid-template-columns:
-    minmax(0, var(--inline-content-inset))
-    1fr auto 1fr minmax(0, var(--inline-content-inset));
-  grid-template-areas: ". logo buttons layout .";
-  align-items: center;
-  gap: var(--cpd-space-3x);
-  padding-block: var(--cpd-space-10x);
-  background: linear-gradient(
-    180deg,
-    rgba(0, 0, 0, 0) 0%,
-    var(--cpd-color-bg-canvas-default) 100%
-  );
-}
-
-.footer.hidden {
-  display: none;
-}
-
-.footer.overlay {
-  position: absolute;
-  inset-block-end: 0;
-  inset-inline: 0;
-  opacity: 1;
-  transition: opacity 0.15s;
-}
-
-.footer.overlay.hidden {
-  display: grid;
-  opacity: 0;
-}
-
-.footer.overlay:has(:focus-visible) {
-  opacity: 1;
-  pointer-events: initial;
-}
-
-.logo {
-  grid-area: logo;
-  justify-self: start;
-  display: flex;
-  align-items: center;
-  gap: var(--cpd-space-2x);
-  padding-inline-start: var(--cpd-space-1x);
-}
-
-.buttons {
-  grid-area: buttons;
-  justify-self: center;
-  display: flex;
-  gap: var(--cpd-space-3x);
-}
-
-.layout {
-  grid-area: layout;
-  justify-self: end;
-}
-
-@media (max-width: 660px) {
-  .footer {
-    grid-template-areas: ". buttons buttons buttons .";
-  }
-
-  .logo {
+@container element-call (max-width: 320px) {
+  .invite {
     display: none;
-  }
-
-  .layout {
-    display: none !important;
-  }
-}
-
-@media (max-width: 370px) {
-  .shareScreen {
-    display: none;
-  }
-
-  @media (max-height: 400px) {
-    .footer {
-      display: none;
-    }
-  }
-}
-
-@media (max-width: 320px) {
-  .invite,
-  .raiseHand {
-    display: none;
-  }
-}
-
-@media (max-height: 400px) {
-  .footer {
-    padding-block: var(--cpd-space-4x);
-  }
-}
-
-/* Exclusive with the query above: both used to match below 400px, and the
-broader one won on source order, so the tight-landscape padding never applied. */
-@media (min-height: 401px) and (max-height: 800px) {
-  .footer {
-    padding-block: var(--cpd-space-8x);
-  }
-}
-
-@media (min-width: 800px) {
-  .buttons {
-    gap: var(--cpd-space-4x);
   }
 }
 
@@ -164,11 +99,15 @@ broader one won on source order, so the tight-landscape padding never applied. *
   /* Disable pointer events so the overlay doesn't block interaction with
   elements behind it */
   pointer-events: none;
-}
 
-.fixedGrid > :not(:first-child),
-.scrollingGrid > :not(:first-child) {
-  pointer-events: initial;
+  > :not(:first-child) {
+    pointer-events: initial;
+  }
+
+  .tile {
+    position: absolute;
+    inset-block-start: 0;
+  }
 }
 
 .knockBadge {
@@ -197,11 +136,6 @@ broader one won on source order, so the tight-landscape padding never applied. *
 }
 
 .tile {
-  position: absolute;
-  inset-block-start: 0;
-}
-
-.tile.maximised {
   position: relative;
   flex-grow: 1;
 }
